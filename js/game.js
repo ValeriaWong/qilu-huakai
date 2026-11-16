@@ -115,7 +115,15 @@ function rollOrigin(rng, difficulty) {
   a.influence = 20 + rng.int(-5, 5);
   const fragments = rng.shuffle(fam.fragments.slice()).slice(0, 3);
   if (counter) fragments.push(fam.counter);
-  return { familyKey: key, familyName: fam.name, card: fam.card, fragments, counter, attrs: a };
+  // v0.7: home province (the T1 region picker defaults to it), family
+  // economy E-tier (independent of the family type) and the background
+  // facts the chronicle conditions need (soe/stocks/trading/selfHouse/
+  // medical). 孤儿不自动负债: the -3 pocket loan stays on the card, the
+  // E-tier rolls normally for the guardian.
+  const homeRegion = rng.pick(['shandong', 'liaoning', 'jilin', 'heilongjiang']);
+  const econ = rollFamilyEcon(rng);
+  const bg = rollFamilyBg(rng, fam.locale || 'city', econ.tier);
+  return { familyKey: key, familyName: fam.name, card: fam.card, fragments, counter, attrs: a, homeRegion, econ, bg };
 }
 
 function rollH0(rng, familyKey) {
@@ -198,8 +206,14 @@ function screenDice() {
       { text: '你妈说隔壁家孩子学了会计。' },
       { text: '你爸把招生简章翻到了第 38 页。' },
     ]);
-    // 家庭抗压：v5 改成 T1 就可见的「家庭兜底」。
-    s.flags.familySafety = s.origin.attrs.money >= 2 ? '家里能接住你一次，但只有一次。' : '家里接不住你——这条路得你自己走。';
+    // 家庭抗压：v5 改成 T1 就可见的「家庭兜底」。v0.7: era runs derive
+    // it from familySupportCapacity (cash × 意愿 × 可接触性), not from
+    // pocket money; legacy runs keep the old pocket-money rule.
+    s.flags.familyEcon = s.origin.econ;
+    s.flags.familyBg = s.origin.bg;
+    s.flags.familySafety = s.flags.era
+      ? familySafetyText(s.origin.econ, s.origin.familyKey)
+      : (s.origin.attrs.money >= 2 ? '家里能接住你一次，但只有一次。' : '家里接不住你——这条路得你自己走。');
     s.rngState = rng.getState();
     autosave();
     screenOrigin();
@@ -208,6 +222,8 @@ function screenDice() {
 
 function screenOrigin() {
   const s = G.state, o = s.origin;
+  const econ = s.flags.familyEcon || o.econ;
+  const regionName = (GAOKAO_REGIONS[o.homeRegion] || {}).name || '';
   setScreen(`
     <h1>S2 · 出身卡</h1>
     <p class="tagline">你没得选的那部分</p>
@@ -216,6 +232,8 @@ function screenOrigin() {
       <p><b>父母：</b>${esc(o.card.parents)}</p>
       <p><b>${esc(o.card.money)}</b></p>
       <p><b>${esc(o.card.city)}</b></p>
+      ${regionName ? `<p><b>老家：</b>${esc(regionName)}（高考默认在这个省考，可改）</p>` : ''}
+      ${econ ? `<p><b>家庭经济：</b>${esc(econ.label)}，18 岁时家里可动用现金 ${econ.cash} 万。能真正拿出来兜你的：约 ${supportCash(econ, o.familyKey)} 万。</p>` : ''}
       <p><b>判词：</b>${esc(o.card.verdict)}</p>
     </div>
     <p class="intro">即将面对的第一个岔路口：高考志愿三天截止，父亲已备好省内师范名单。</p>
@@ -224,11 +242,21 @@ function screenOrigin() {
 
 function screenFragments() {
   const s = G.state, o = s.origin;
+  // v0.7: the 0-18 chronicle resolves here (retrospective, once): the
+  // era events of birthYear..examYear-1 that apply to this player, with
+  // their effects on family cash / stress / health already applied.
+  const era = s.flags.era;
+  const history = era ? applyEraHistory(s, G.rng) : [];
+  const eraLog0 = era ? (s.eraLog || []).filter((e) => e.turn === 0) : [];
   setScreen(`
     <h1>S3 · 那 18 年</h1>
     <p class="intro">成长记录是展开层，点开看，默认收起，可以跳过。这一段没有输入框。</p>
     ${o.fragments.map((f, i) => `<details class="fragment"><summary>片段 ${i + 1}${i === o.fragments.length - 1 && o.counter ? ' · 反例' : ''}</summary><p>${esc(f)}</p></details>`).join('')}
+    ${era ? `<details class="fragment"><summary>时代大事记（0–18 岁）${eraLog0.length ? ' · ' + eraLog0.length + ' 件进过你家门' : ' · 这一段没有大事进过你家门'}</summary>${eraLog0.length ? eraLog0.map((e) => `<p>${esc(e.text)}</p>`).join('') : '<p>你长大的那 18 年里，时代的大事没有直接砸到你家头上——背景还是那个背景，只是没进你家门。</p>'}<p class="muted">历史事件只按条件进家门（户口、家庭背景、持股……），没中的不会硬塞给你。2025/2026 年的事还没核实，不写进这里。</p></details>` : ''}
     <div class="actions"><button class="primary" data-act="to-transition">继续</button></div>`);
+  // Persist the resolved 0-18 trajectory (eraLog + rng state) even when
+  // nothing applied — the roll memo and the done-flag must survive reload.
+  if (era) { s.rngState = G.rng.getState(); autosave(); }
 }
 
 // ---------- S4/S5: rewrite (replay runs only) ----------
@@ -302,6 +330,18 @@ function applyRewrite() {
   if (tags.includes('祖辈带大')) a.family = 1;
   if (tags.includes('家里常吵架')) a.family = -1;
   newOrigin.attrs = a;
+  // v0.7: the new family brings its own home province, economy and
+  // background. The 0-18 chronicle is NOT re-run (already resolved for
+  // the first origin at S3; the rewrite changes the story, not the
+  // history — flags.eraHistoryDone stays true).
+  newOrigin.homeRegion = G.rng.pick(['shandong', 'liaoning', 'jilin', 'heilongjiang']);
+  newOrigin.econ = rollFamilyEcon(G.rng);
+  newOrigin.bg = rollFamilyBg(G.rng, fam.locale || 'city', newOrigin.econ.tier);
+  s.flags.familyEcon = newOrigin.econ;
+  s.flags.familyBg = newOrigin.bg;
+  s.flags.familySafety = s.flags.era
+    ? familySafetyText(newOrigin.econ, key)
+    : (a.money >= 2 ? '家里能接住你一次，但只有一次。' : '家里接不住你——这条路得你自己走。');
   s.rewrite = { text, tags, origin: newOrigin };
   s.origin = newOrigin;
   Object.assign(s.attrs, a);
@@ -384,7 +424,7 @@ function screenT1Region() {
     <h1>T1 · 18 岁 · 高考志愿填报</h1>
     <p class="intro">你 ${era.birthYear} 年出生，${examYear} 年高考。先定一件事：在哪里参加高考？分数和分数线都按这一年的真实线表走。</p>
     <div class="options">${rows.map(({ r, mode, playable }) => playable
-      ? `<button class="opt" data-act="t1-era-region-pick" data-id="${r.id}"><b>${r.name} · ${examYear} 年高考</b><span>${EXAM_MODE_LABEL[mode]} · 分数线已核实，科类下一步选。</span></button>`
+      ? `<button class="opt" data-act="t1-era-region-pick" data-id="${r.id}"><b>${r.name} · ${examYear} 年高考${s.origin && s.origin.homeRegion === r.id ? '（老家）' : ''}</b><span>${EXAM_MODE_LABEL[mode]} · 分数线已核实，科类下一步选。</span></button>`
       : `<button class="opt" disabled><b>${r.name} · ${examYear} 年高考</b><span>${EXAM_MODE_LABEL[mode]} · 该年分数线未提供。</span></button>`).join('')}</div>
     <p class="muted">先做山东、辽宁、吉林、黑龙江四个省，其他省以后加。选定后不能改，分数当场掷出并封存。</p>`);
 }
@@ -444,6 +484,13 @@ function screenT1() {
   const h0 = s.sealed.H0;
   const tampered = h0 && h0.value >= 60;
   const g = s.flags.gaokao;
+  // v0.7: this year's era events resolve when the T1 screen first
+  // renders (idempotent — re-renders from the diagnosis toggle apply
+  // nothing twice).
+  if (s.flags.era) {
+    const applied = applyEraForTurn(s, G.rng, 1);
+    if (applied.length) { s.rngState = G.rng.getState(); autosave(); }
+  }
   const region = GAOKAO_REGIONS[g.region] || GAOKAO_REGIONS[GAOKAO_DEFAULT_REGION];
   // v0.5.1: effective score is the sealed base only. An old save's bonus
   // (from the removed ad boost) is ignored; the player is told once.
@@ -478,6 +525,7 @@ function screenT1() {
       <p><b>征兆：</b>${h0 ? h0.omens.map((o) => esc(o.text)).join(' ') : ''}</p>
       ${tampered ? `<p class="warn">这颗骰在你出生那年掷出：父母干预强度 ${h0.value}。第一志愿已经被改成了省内师范。</p>` : `<p>父母干预强度 ${h0 ? h0.value : '?'}，这一次，他们让你自己填。</p>`}
     </div>
+    ${eraYearCardHtml(s, 1)}
     <h2>你想报的专业</h2>
     <div class="card">
       <p><input id="t1-major" type="text" placeholder="输入你想报的专业，比如：计算机、临床医学、会计……" maxlength="20" value="${esc(G.t1MajorDraft || '')}"></p>
@@ -488,7 +536,7 @@ function screenT1() {
     <h2>你的第一志愿</h2>
     <div class="options">
       <button class="opt" data-act="t1-pick" data-id="obey"><b>听父母的</b><span>${tampered ? '第一志愿已经是省内师范。' : '按父母的意思，报省内师范。'}家庭线 +1，自主执念进度 −1。${era ? 'k 由录取档位定。' : '专业系数 k = 1.0。'}</span></button>
-      <button class="opt" data-act="t1-pick" data-id="insist"><b>坚持自己</b><span>就报你上面写的专业。${era ? '录取看档位，不看专业。' : '分够参考线才能进，差分会调剂。'}家庭线 −1。${era ? 'k 由档位定；' : '专业系数 k = 1.3；'}家庭经济 ≤2 档时需自挣学费（T2–T5 每年 −1 AP）。</span></button>
+      <button class="opt" data-act="t1-pick" data-id="insist"><b>坚持自己</b><span>就报你上面写的专业。${era ? '录取看档位，不看专业。' : '分够参考线才能进，差分会调剂。'}家庭线 −1。${era ? 'k 由档位定；三本且家庭现金 < 8 万时需自挣学费（T2–T5 每年 −1 AP）。' : '专业系数 k = 1.3；家庭经济 ≤2 档时需自挣学费（T2–T5 每年 −1 AP）。'}</span></button>
       <button class="opt" data-act="t1-pick" data-id="negotiate"><b>谈判，折中</b><span>还是报你写的专业，${era ? 'k 由档位定，' : '但 k = 1.0，'}留一个以后再谈的口子。</span></button>
     </div>
     <p class="muted">承诺卡 A（志愿，T2–T4 兑现，T5 回顾）：专业锁定 8 年，${era ? '专业系数 k 由录取档位定。档位线是真实历史控制线。' : '决定专业成长系数 k。参考线是游戏内的简化线，不是真实投档线。'}</p>`);
@@ -593,10 +641,18 @@ function pickT1(choice) {
   if (choice === 'obey') { a.family += 1; s.flags.obsessionProgress = (s.flags.obsessionProgress || 0) - 1; }
   if (choice === 'insist') {
     a.family -= 1;
-    if (s.origin.attrs.money <= 2) { s.flags.selfFunded = true; }
+    // v0.7: era runs — 三本 + 家庭现金 < 8 万 → 强制打工 (T2–T5 −1 AP);
+    // legacy runs keep the v5 pocket-money rule.
+    if (s.flags.gaokao && s.flags.gaokao.era) {
+      if (adm.tier === '三本' && s.flags.familyEcon && s.flags.familyEcon.cash < 8) s.flags.selfFunded = true;
+    } else if (s.origin.attrs.money <= 2) { s.flags.selfFunded = true; }
   }
   s.major = { name: adm.major, source, tier: adm.tier };
   s.flags.majorK = adm.k;
+  // v0.7: degree bonus from the era tier (一本 +0.5 / 三本 −0.5 / 专科 −0.5).
+  if (s.flags.gaokao && s.flags.gaokao.era) {
+    s.flags.degreeBonus = { '一本': 0.5, '三本': -0.5, '专科': -0.5 }[adm.tier] || 0;
+  }
   s.commitments.A = {
     text: '志愿：' + adm.major + '（' + stance + '，' + adm.tier + '）',
     signedAt: 'T1', dueTurn: 4,
@@ -607,11 +663,58 @@ function pickT1(choice) {
     <h1>承诺卡 A 已签署</h1>
     <div class="card"><p>你的专业：<b>${esc(adm.major)}</b>（${stance} · ${adm.tier}）。专业系数 k = ${adm.k}，T2–T4 兑现，T5 回顾。骰子已封存，兑现时只读档、不重掷。</p>
     ${adm.note ? `<p>${esc(adm.note)}</p>` : ''}
-    ${s.flags.selfFunded ? '<p>家庭经济 ≤2 档：自挣学费，T2–T5 每年 −1 AP。</p>' : ''}
+    ${s.flags.selfFunded ? `<p>${(s.flags.gaokao && s.flags.gaokao.era) ? '三本且家庭现金 < 8 万：自挣学费，T2–T5 每年 −1 AP。' : '家庭经济 ≤2 档：自挣学费，T2–T5 每年 −1 AP。'}</p>` : ''}
     <p class="muted">征兆已记下，兑现那天会拿出来对照：你当时收到过什么信号、忽略了什么。</p></div>
     ${adm.tier === '落榜'
       ? `<div class="actions"><button class="primary" data-act="t1-fallback" data-id="repeat">复读一年</button><button data-act="t1-fallback" data-id="vocational">等专科补录</button><button data-act="t1-fallback" data-id="work">先工作一年</button></div>`
       : `<div class="actions"><button class="primary" data-act="year-start">进入 T2 · 19 岁</button></div>`}`);
+}
+
+// ---------- v0.7: era card + 专升本 ----------
+// The year's era events, from state.eraLog (applied once, read many times).
+function eraYearCardHtml(s, turn) {
+  if (!s.flags.era) return '';
+  const entries = eraLogForTurn(s, turn);
+  if (!entries.length) return `<div class="card"><p class="muted">这一年 · 时代：没有大事进你家门。</p></div>`;
+  return `<div class="card"><h2>这一年 · 时代</h2>${entries.map((e) => `<p>${esc(e.text)}</p>`).join('')}<p class="muted">历史事件只按条件进家门，没中的不会硬塞。钱的变化走的是家庭现金，压力/健康是你自己的。</p></div>`;
+}
+// 专升本 (design v6): 专科 players, from T5 on. 55% per attempt, once a
+// year. Success lifts the 专科 offer penalty (degreeBonus -> 0) and the
+// tier becomes 本科（专升本）. The T5 attempt is free (no AP phase at
+// graduation); T6–T8 attempts cost 1 AP.
+function shengbenEligible(s) {
+  return !!(s.flags.era && s.major && s.major.tier === '专科' && !s.flags.shengbenDone);
+}
+function shengbenHtml(s, where) {
+  if (!shengbenEligible(s)) return '';
+  const tried = s.flags.shengbenYear === s.turn;
+  const last = s.flags.shengbenLast;
+  const result = last && last.turn === s.turn ? `<p>${esc(last.text)}</p>` : '';
+  const btn = where === 't5'
+    ? `<button class="opt" data-act="shengben-t5" ${tried ? 'disabled' : ''}><b>专升本</b><span>55% 成功。今年一次机会，成功后文凭按本科算，offer 档回正。${tried ? '（今年已试过）' : ''}</span></button>`
+    : `<button class="opt" data-act="shengben-year" ${s.ap < 1 || tried ? 'disabled' : ''}><b>专升本</b><span>1 AP，55% 成功。今年一次机会，成功后文凭按本科算，offer 档回正。${tried ? '（今年已试过）' : ''}</span></button>`;
+  return `<div class="card"><h2>专升本</h2>${result}${btn}</div>`;
+}
+function attemptShengben(s, rng, costAp) {
+  if (!shengbenEligible(s)) return false;
+  if (s.flags.shengbenYear === s.turn) return false; // once per year
+  if (costAp > 0) {
+    if (s.ap < costAp) return false;
+    s.ap -= costAp;
+  }
+  s.flags.shengbenYear = s.turn;
+  const ok = rng.int(1, 100) <= 55;
+  if (ok) {
+    s.flags.shengbenDone = true;
+    s.major.tier = '本科（专升本）';
+    s.flags.degreeBonus = 0;
+    s.flags.shengbenLast = { turn: s.turn, ok: true, text: '专升本考上了：文凭按本科算，T5 的 offer 档回正。' };
+  } else {
+    s.flags.shengbenLast = { turn: s.turn, ok: false, text: '专升本没考上：今年没机会了，明年可以再试一次。' };
+  }
+  s.rngState = rng.getState();
+  autosave(ok ? '专升本成功' : '专升本未过');
+  return true;
 }
 
 // ---------- yearly loop T2–T8 ----------
@@ -676,7 +779,7 @@ function startYear(turn) {
   s.turn = turn;
   s.ap = 3 - (s.flags.nextYearApPenalty || 0);
   if (s.flags.nextYearApPenalty) s.flags.nextYearApPenalty = 0;
-  if (s.flags.selfFunded && turn >= 2 && turn <= 4) s.ap -= 1; // 自挣学费（A 卡兑现窗口 T2–T4）
+  if (s.flags.selfFunded && turn >= 2 && turn <= 5) s.ap -= 1; // 自挣学费（A 卡兑现窗口 T2–T4，v0.7 设计为 T2–T5 四年；T5 无行动环节，实际扣 T2–T4）
   s.ap = Math.max(1, s.ap);
   // Housing state: dorm until the internship year, then renting. Events
   // with a housing gate (ev-rent) read this, not the player's age.
@@ -700,6 +803,9 @@ function startYear(turn) {
     s.yearlyLog.push({ turn, type: 'h9', text: good ? '意外之喜：一位贵人在行业群里转发了你的文章。影响力 +4。' : '意外：通勤路上被追尾，修车花掉 1 万，压力 +5。' });
     if (good) s.attrs.influence += 4; else { s.attrs.money -= 1; s.attrs.stress += 5; }
   }
+  // v0.7: this year's era events (era runs only; idempotent — the
+  // guard lives in applyEraEvent, so re-renders apply nothing twice).
+  applyEraForTurn(s, rng, turn);
   s.rngState = rng.getState();
   if (turn === 5) return screenT5();
   if (turn === 6) return screenT6();
@@ -716,8 +822,10 @@ function startYear(turn) {
     <h1>T${turn} · ${17 + turn} 岁</h1>
     <p class="muted">本年 AP：${s.ap}。每年只能选 3 件，这是全游戏的取舍。</p>
     ${s.flags.industryDown ? '<p class="warn">行业下行期：薪资判定 −20%，晋升成功率 −15%。</p>' : ''}
+    ${eraYearCardHtml(s, turn)}
     ${eventCardHtml(ev, s)}
     ${venturePanelHtml(s)}
+    ${shengbenHtml(s, 'year')}
     <h2>今年的行动（${s.ap} AP）</h2>
     <div class="options">${ventureActionHtml(s)}${ACTIONS.map((ac) => `<button class="opt" data-act="action" data-id="${ac.id}" ${s.ap < ac.ap ? 'disabled' : ''}><b>${ac.name}</b><span>${ac.desc}</span></button>`).join('')}</div>
     <div class="actions"><button class="primary" data-act="year-end">结束这一年 → 结算</button></div>`);
@@ -752,8 +860,10 @@ function startYearRefresh() {
   setScreen(`
     <h1>T${turn} · ${17 + turn} 岁</h1>
     <p class="muted">本年 AP：${s.ap}。已选：${s.yearActions.join('、') || '无'}</p>
+    ${eraYearCardHtml(s, turn)}
     ${eventCardHtml(ev, s)}
     ${venturePanelHtml(s)}
+    ${shengbenHtml(s, 'year')}
     <h2>今年的行动（${s.ap} AP）</h2>
     <div class="options">${ventureActionHtml(s)}${ACTIONS.map((ac) => `<button class="opt" data-act="action" data-id="${ac.id}" ${s.ap < ac.ap ? 'disabled' : ''}><b>${ac.name}</b><span>${ac.desc}</span></button>`).join('')}</div>
     <div class="actions"><button class="primary" data-act="year-end">结束这一年 → 结算</button></div>`);
@@ -807,6 +917,8 @@ function screenT5() {
     <h1>T5 · 22 岁 · 毕业去向</h1>
     <p class="intro">承诺卡 A（志愿）已在 T4 兑现——回头看，18 岁的选择把你带到了这里。你的专业是 <b>${esc(s.major ? s.major.name : '（旧存档，未记录）')}</b>${s.major && s.major.tier ? `（${esc(s.major.tier)}）` : ''}，专业系数 k = ${s.flags.majorK}，起点已定。同时签下承诺卡 B：第一份工作，锁定城市 × 行业，后续 80% 的机会只从这条线长出来。</p>
     <div class="card"><p><b>offer 档位（内部公式）：</b>档位 = floor((专业×0.5 + 表达×0.3 + 人脉×0.2) / 100 × 4) + 1。你当前是 <b>${offerTier(s)} 档</b>（1 小公司 / 2 普通 / 3 好公司 / 4 大厂）。</p></div>
+    ${eraYearCardHtml(s, 5)}
+    ${shengbenHtml(s, 't5')}
     <div class="options">${T5_JOBS.map((j) => `<button class="opt" data-act="t5-pick" data-id="${j.id}"><b>${j.name}</b><span>${j.desc} 钱 +${j.money} 万/年。</span></button>`).join('')}</div>`);
 }
 
@@ -818,6 +930,7 @@ function pickT5(id) {
   if (id === 'bigtech') s.flags.highPay = true;
   // Employment state from here on: gates ev-race / ev-boundary.
   s.flags.employment = id === 'startup' ? 'startup' : 'employed';
+  s.flags.jobIndustry = j.industry; // v0.7: chronicle industry conditions read this
   s.flags.housing = 'rent';
   s.commitments.B = { text: '第一份工作：' + j.name, signedAt: 'T5', dueTurn: 6, snapshot: { ...s.attrs } };
   autosave('承诺 B 已签署');
@@ -896,16 +1009,31 @@ function enterSlice(direct) {
 function sliceBorrowOptions(s) {
   const money = s.attrs.money || 0;
   const gap = Math.max(0, Math.round((3 - money) * 10) / 10);
+  // v0.7: era runs — the family can put at most
+  // min(流动现金 × 20%, 缺口） × 支持兑现系数 behind you tonight
+  // (design v6 familySupportCapacity). Legacy / direct-slice runs keep
+  // the uncapped gap formula.
+  const econ = s.flags && s.flags.familyEcon;
+  const factor = econ ? supportFactor(s.origin ? s.origin.familyKey : null) : 1;
+  const famCap = (amt) => econ ? Math.round(Math.min(econ.cash * 0.2, amt) * factor * 10) / 10 : amt;
   if (gap <= 0) {
-    return [
+    const pre = famCap(1);
+    const opts = [
       { text: '靠储蓄，不借', fx: { stress: -2 }, seal: '你算了一下存款，够撑三个月。这笔账不用跟家里开这个口。', omen: '你把存款 App 的数字截了个图，存进了备忘录。' },
-      { text: '借 1 万以防万一', fx: { money: 1, stress: -2 }, seal: '你跟家里借了 1 万垫底。妈妈说：“不够再说。”', omen: '转账到账的短信提示音，在深夜格外响。' },
-      { text: '压缩开支，硬扛', fx: { money: 0.5, stress: 2 }, seal: '你把下个月的预算砍了一半。外卖换成了自己做饭。', omen: '你打开记账 App，删掉了三个订阅。' },
+    ];
+    if (pre > 0) opts.push({ text: `借 ${pre} 万以防万一`, fx: { money: pre, stress: -2 }, seal: `你跟家里借了 ${pre} 万垫底。妈妈说：“不够再说。”`, omen: '转账到账的短信提示音，在深夜格外响。' });
+    opts.push({ text: '压缩开支，硬扛', fx: { money: 0.5, stress: 2 }, seal: '你把下个月的预算砍了一半。外卖换成了自己做饭。', omen: '你打开记账 App，删掉了三个订阅。' });
+    return opts;
+  }
+  const cap = famCap(gap);
+  if (cap <= 0) {
+    return [
+      { text: '不借，自己扛', fx: { stress: 6 }, seal: '你没开口。家里这回也拿不出钱——这三个月会很难，但你想试试不靠家里能走多远。', omen: '你打开存款 App，看了一眼余额，又关上了。' },
     ];
   }
-  const half = Math.round((gap / 2) * 10) / 10;
+  const half = Math.round((cap / 2) * 10) / 10;
   return [
-    { text: `跟家里借 ${gap} 万`, fx: { money: gap, family: -1, stress: -5 }, seal: '妈妈没问为什么，只说了一句：“卡号发来。”家庭线 −1——不是关系坏了，是你开始记账了。', omen: '转账到账的短信提示音，在深夜格外响。' },
+    { text: `跟家里借 ${cap} 万`, fx: { money: cap, family: -1, stress: -5 }, seal: `妈妈没问为什么，只说了一句：“卡号发来。”家里这回最多能拿出 ${cap} 万。家庭线 −1——不是关系坏了，是你开始记账了。`, omen: '转账到账的短信提示音，在深夜格外响。' },
     { text: '不借，自己扛', fx: { stress: 6 }, seal: '你没开口。这三个月会很难，但你想试试不靠家里能走多远。', omen: '你打开存款 App，看了一眼余额，又关上了。' },
     { text: `借一半，${half} 万`, fx: { money: half, stress: -2 }, seal: `你借了 ${half} 万。一半靠家里，一半靠自己——这是你能接受的中间态。`, omen: '妈妈多转了 5000，备注写着“别省着”。' },
   ];
@@ -1272,6 +1400,8 @@ document.addEventListener('click', (e) => {
     case 'action': applyAction(id); break;
     case 'year-end': endYear(); break;
     case 't5-pick': pickT5(id); break;
+    case 'shengben-t5': if (attemptShengben(G.state, G.rng, 0)) screenT5(); break;
+    case 'shengben-year': if (attemptShengben(G.state, G.rng, 1)) startYearRefresh(); break;
     case 't6-pick': pickT6(id); break;
     case 'to-slice': enterSlice(false); break;
     case 'slice-pick': pickSlice(Number(id)); break;

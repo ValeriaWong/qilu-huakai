@@ -176,6 +176,7 @@ function offerTier(state) {
   const a = state.attrs;
   let tier = Math.floor(((a.skill * 0.5 + a.express * 0.3 + a.network * 0.2) / 100) * 4) + 1;
   tier += state.flags.degreeBonus || 0; // 一本 +0.5 / 专科 −0.5 (stored as 0.5 steps)
+  tier += state.flags.gradOfferMod || 0; // v0.7: 2022 届毕业潮 offer 档 −1 (大事记)
   if (state.flags.parentArranged) tier += 1;
   if (state.flags.industryDown) tier -= 1;
   return Math.max(1, Math.min(4, Math.round(tier)));

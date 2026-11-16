@@ -29,6 +29,7 @@ const FAMILIES = {
     name: '模范父母', weight: 5,
     desc: '无条件的爱，父亲好，母亲也好。',
     money: 5, health: 85, stress: 10,
+    locale: 'city', // v0.7: 户口地层级 — city 省会 / county 县城 / town 镇上（大事记条件用）
     lines: ['家庭', '父母', '经济', '城市', '一句判词'],
     card: {
       family: '父母都在身边，吵架也当面吵，和好也当面和好。',
@@ -48,6 +49,7 @@ const FAMILIES = {
     name: '父亲缺席', weight: 30,
     desc: '父亲长期不在身边，或在身边也不管。',
     money: 2, health: 75, stress: 20,
+    locale: 'county',
     card: {
       family: '爸爸常年在外，一年回家两次，视频里永远在工地或出差的路上。',
       parents: '妈妈一个人扛起了家，脾气越来越急，对你的要求也越来越高。',
@@ -66,6 +68,7 @@ const FAMILIES = {
     name: '母亲缺席', weight: 30,
     desc: '母亲长期不在身边，或在身边也情感缺席。',
     money: 2, health: 75, stress: 20,
+    locale: 'county',
     card: {
       family: '妈妈在你很小的时候就去外地打工了，一年回来一次。',
       parents: '爸爸沉默寡言，家里的事他很少过问，只管把饭做熟。',
@@ -84,6 +87,7 @@ const FAMILIES = {
     name: '双缺席', weight: 20,
     desc: '父母都不在身边，由祖辈或亲戚带大。',
     money: 0, health: 70, stress: 25,
+    locale: 'town',
     card: {
       family: '父母都在外地，你跟着奶奶长大，逢年过节才见他们一面。',
       parents: '奶奶是你真正的监护人，她的话比父母的电话管用。',
@@ -102,6 +106,7 @@ const FAMILIES = {
     name: '孤儿', weight: 8,
     desc: '无父母线，由其他监护人或机构抚养。',
     money: -3, health: 70, stress: 25,
+    locale: 'city',
     card: {
       family: '你没有父母，由福利院和后来的养父母抚养长大。',
       parents: '监护人对你很好，但你始终记得：这份好是别人给的，不是天生的。',
@@ -120,6 +125,7 @@ const FAMILIES = {
     name: 'NPD 家庭', weight: 7,
     desc: '父母以自我为中心、情感操控、否认打压。只出现在困难 / 噩梦模式池里。',
     money: 3, health: 72, stress: 35,
+    locale: 'city',
     hardOnly: true,
     card: {
       family: '家里的规则是：父母永远是对的，你的感受不算数。',
@@ -392,10 +398,10 @@ const MAJOR_LINE_DEFAULT_OFFSET = 60;
 // there were no major options at all.
 const T1_MAJORS = ['计算机', '临床医学', '法学', '金融', '会计', '新闻传播', '土木', '英语', '艺术设计', '师范'];
 const T5_JOBS = [
-  { id: 'bigtech', name: '大厂', desc: '钱高，压力 +8/年。', money: 18, stress: 8 },
-  { id: 'stable',  name: '体制内', desc: '稳，但影响力上限 40。', money: 9, stress: 2 },
-  { id: 'hometown',name: '回老家', desc: '家庭线 +2，事业慢。', money: 7, stress: 1 },
-  { id: 'startup', name: '创业公司', desc: '专业成长 ×1.5，但 3 年内倒闭率 35%。', money: 11, stress: 6 },
+  { id: 'bigtech', name: '大厂', desc: '钱高，压力 +8/年。', money: 18, stress: 8, industry: '互联网' },
+  { id: 'stable',  name: '体制内', desc: '稳，但影响力上限 40。', money: 9, stress: 2, industry: '体制内' },
+  { id: 'hometown',name: '回老家', desc: '家庭线 +2，事业慢。', money: 7, stress: 1, industry: '本地服务' },
+  { id: 'startup', name: '创业公司', desc: '专业成长 ×1.5，但 3 年内倒闭率 35%。', money: 11, stress: 6, industry: '创业公司' },
 ];
 
 // T9 裁员之夜 (the 3-minute slice). Three decisions, first within 90s.
