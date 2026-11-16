@@ -138,6 +138,47 @@ function startNew(mode) {
   G.rng.setState(seed);
   state.attrs = blankAttrs();
   if (mode === 'slice') { enterSlice(true); return; }
+  screenEraYear(); // v0.6: S0.5 picks the birth year before the S1 dice
+}
+
+// ---------- S0.5: pick a birth year (v0.6, v6 era engine) ----------
+// Between S0 and S1. The birth year locks the exam year and the whole
+// timeline (birth+18=exam, exam+8=T9, exam+17=settlement). Only years with
+// at least one verified line are playable right now (exam 2010-2020 ->
+// birth 1992-2002); the rest show locked with the reason, never a fallback
+// to a neighbouring year's line.
+function screenEraYear() {
+  const playable = new Set(playableBirthYears());
+  const years = [];
+  for (let b = ERA_BIRTH_MAX; b >= ERA_BIRTH_MIN; b--) years.push(b);
+  const btn = (b) => {
+    const exam = examYearForBirth(b);
+    const tag = isHistoryPack(b) ? '历史扩展' : (b >= ERA_BIRTH_HIGHLIGHT_MIN ? '推荐' : '');
+    const head = `<b>${b} 年出生 → ${exam} 年高考</b>`;
+    if (!playable.has(b)) {
+      return `<button class="opt" disabled>${head}<span>${tag ? tag + ' · ' : ''}该年分数线未核实，暂不能玩（线表补齐后开放）。</span></button>`;
+    }
+    return `<button class="opt" data-act="era-year-pick" data-id="${b}">${head}<span>${tag ? tag + ' · ' : ''}时间线按这一年走：T9 是 ${t9Year(exam)} 年，35 岁结算是 ${settlementYear(exam)} 年。</span></button>`;
+  };
+  setScreen(`
+    <h1>S0.5 · 你是哪一年出生的？</h1>
+    <p class="intro">这一局演的是真实年份里的一代人：高考分数线、大事记、家庭经济都按你选的年份走，出生年份一选就锁死，时间线不能乱。</p>
+    <p class="muted">可玩出生年 1990–2008（高考 2008–2026），1970–1989 为历史扩展包。当前已核实的分数线只覆盖 2010–2020 年高考，所以现在能玩的是 1992–2002 年出生；其他年份等线表补齐后开放。</p>
+    <h2>1990–2008 年出生</h2>
+    <div class="options">${years.filter((b) => b >= 1990).map(btn).join('')}</div>
+    <h2>1970–1989 年出生 · 历史扩展</h2>
+    <p class="muted">这一段的人生 T18 落在 2005 年以前，全是真实历史，没有移动互联网玩法。</p>
+    <div class="options">${years.filter((b) => b < 1990).map(btn).join('')}</div>`);
+}
+
+function pickEraYear(birthYear) {
+  const b = Number(birthYear);
+  const s = G.state;
+  if (!Number.isInteger(b) || b < ERA_BIRTH_MIN || b > ERA_BIRTH_MAX) return;
+  if (!playableBirthYears().includes(b)) return;
+  s.flags.era = { birthYear: b, examYear: examYearForBirth(b) };
+  s.rngState = G.rng.getState();
+  autosave('选定出生年份 ' + b);
   screenDice();
 }
 
@@ -318,13 +359,69 @@ function screenTransition() {
 // v0.5: region picker, shown once when the run has no Gaokao record.
 // The score is rolled here, region-relative (line1 −20 to line1 +220),
 // so the distribution stays meaningful in every region.
+// v0.6: era runs (flags.era set in S0.5) pick region + track against the
+// verified line table instead; legacy runs (no era, incl. old saves) keep
+// the 2026 picker below.
 function screenT1Region() {
-  const regions = Object.values(GAOKAO_REGIONS);
-  setScreen(`
+  const s = G.state;
+  const era = s.flags.era;
+  if (!era) {
+    const regions = Object.values(GAOKAO_REGIONS);
+    setScreen(`
     <h1>T1 · 18 岁 · 高考志愿填报</h1>
     <p class="intro">先定一件事：你在哪里参加高考？分数和分数线都按这个省的现行政策走。</p>
     <div class="options">${regions.map((r) => `<button class="opt" data-act="t1-region-pick" data-id="${r.id}"><b>${r.name} ${r.year}</b><span>${r.model}${r.track ? ' · ' + r.track + '线' : ''} · 总分 ${r.total} · 一段线/本科线 ${r.line1} · 特殊类型线 ${r.specialLine} · ${r.batchName}最多 ${r.batchChoices} 个${r.batchUnit}</span></button>`).join('')}</div>
     <p class="muted">先做山东、辽宁、吉林、黑龙江四个省，其他省以后加。选定后不能改，分数当场掷出并封存。</p>`);
+    return;
+  }
+  const examYear = era.examYear;
+  const rows = Object.values(GAOKAO_REGIONS).map((r) => {
+    const mode = getExamMode(r.id, examYear);
+    const playable = tracksForMode(mode).some((t) => isLinePlayable(lookupLine(r.id, examYear, t)));
+    return { r, mode, playable };
+  });
+  setScreen(`
+    <h1>T1 · 18 岁 · 高考志愿填报</h1>
+    <p class="intro">你 ${era.birthYear} 年出生，${examYear} 年高考。先定一件事：在哪里参加高考？分数和分数线都按这一年的真实线表走。</p>
+    <div class="options">${rows.map(({ r, mode, playable }) => playable
+      ? `<button class="opt" data-act="t1-era-region-pick" data-id="${r.id}"><b>${r.name} · ${examYear} 年高考</b><span>${EXAM_MODE_LABEL[mode]} · 分数线已核实，科类下一步选。</span></button>`
+      : `<button class="opt" disabled><b>${r.name} · ${examYear} 年高考</b><span>${EXAM_MODE_LABEL[mode]} · 该年分数线未提供。</span></button>`).join('')}</div>
+    <p class="muted">先做山东、辽宁、吉林、黑龙江四个省，其他省以后加。选定后不能改，分数当场掷出并封存。</p>`);
+}
+
+// v0.6: track picker for era runs. One row per track with its line status;
+// only 已核实 rows are clickable. 待核实 rows show as such, never rolled on.
+function screenT1Track(regionId) {
+  const s = G.state, era = s.flags.era;
+  const region = GAOKAO_REGIONS[regionId] || GAOKAO_REGIONS[GAOKAO_DEFAULT_REGION];
+  const mode = getExamMode(region.id, era.examYear);
+  const tracks = tracksForMode(mode);
+  setScreen(`
+    <h1>T1 · 18 岁 · 高考志愿填报</h1>
+    <p class="intro">${region.name} ${era.examYear} 年高考，${EXAM_MODE_LABEL[mode]}。选科类——分数线按科类分开，选定后不能改。</p>
+    <div class="options">${tracks.map((t) => {
+      const row = lookupLine(region.id, era.examYear, t);
+      if (!row || row.status === '未提供') return `<button class="opt" disabled><b>${t}类</b><span>分数线未提供。</span></button>`;
+      if (row.status === '待核实') return `<button class="opt" disabled><b>${t}类</b><span>分数线有冲突，待核实，不能玩。</span></button>`;
+      return `<button class="opt" data-act="t1-track-pick" data-id="${region.id}|${t}"><b>${t}类</b><span>本科线 ${undergradLine(row)} · 已核实。</span></button>`;
+    }).join('')}</div>
+    <p class="muted">分数当场按本科线掷出并封存（本科线 −20 到 +220）。</p>`);
+}
+
+function pickT1Track(regionId, track) {
+  const s = G.state, era = s.flags.era;
+  const row = lookupLine(regionId, era.examYear, track);
+  if (!isLinePlayable(row)) { screenT1Track(regionId); return; }
+  const anchor = undergradLine(row);
+  s.flags.gaokao = {
+    region: regionId,
+    era: { birthYear: era.birthYear, examYear: era.examYear, track, mode: getExamMode(regionId, era.examYear) },
+    base: anchor + G.rng.int(-20, 220),
+    row: { tier1: row.tier1, tier2: row.tier2, tier3: row.tier3, vocational: row.vocational, regime: row.regime, status: row.status },
+  };
+  s.rngState = G.rng.getState();
+  autosave('选定高考地区与科类，高考出分');
+  screenT1();
 }
 
 function pickT1Region(regionId) {
@@ -351,14 +448,26 @@ function screenT1() {
   // v0.5.1: effective score is the sealed base only. An old save's bonus
   // (from the removed ad boost) is ignored; the player is told once.
   const eff = g.base || 0;
-  const scoreLine = eff >= g.specialLine ? '已过特殊类型线。' : eff >= g.line1 ? '已过一段线，未过特殊类型线。' : '未过一段线。';
+  // v0.6: era runs show the real historical tier lines; legacy runs keep
+  // the 2026 policy lines.
+  const era = g.era || null;
+  const eraTiers = era ? admissionTiers(g.row || {}) : [];
+  const eraHit = era ? (eraTiers.find((t) => eff >= t.line) || null) : null;
+  const scoreLine = era
+    ? (eraHit ? `你的分数落在「${eraHit.name}」档。` : '你的分数没够上任何一条线。')
+    : (eff >= g.specialLine ? '已过特殊类型线。' : eff >= g.line1 ? '已过一段线，未过特殊类型线。' : '未过一段线。');
+  const eraTierText = era
+    ? (eraTiers.map((t) => `${t.name}线 ${t.line}（k = ${t.k}）`).join(' · ') || '本年无本科线。')
+    : '';
   setScreen(`
     <h1>T1 · 18 岁 · 高考志愿填报</h1>
     <p class="intro">选专业时，有的父母会阻止你报想报的专业，有的不会——从这里开始，你自己做决定。</p>
     <div class="card">
-      <p><b>高考总分：${eff}</b>（封存分，选地区时掷出，不可更改）· ${region.name} ${region.year} · ${region.model}${region.track ? ' · ' + region.track + '线' : ''} · 总分 ${region.total}</p>
-      <p>一段线 ${region.line1} · 特殊类型线 ${region.specialLine} · 二段线 ${region.line2} · ${region.batchName}每次最多 ${region.batchChoices} 个${region.batchUnit}。${scoreLine}</p>
-      <p class="muted">${esc(region.note)}</p>
+      <p><b>高考总分：${eff}</b>（封存分，选地区时掷出，不可更改）· ${era ? `${region.name} ${era.examYear} 年高考 · ${EXAM_MODE_LABEL[era.mode]} · ${era.track}类` : `${region.name} ${region.year} · ${region.model}${region.track ? ' · ' + region.track + '线' : ''} · 总分 ${region.total}`}</p>
+      ${era
+        ? `<p>${eraTierText} ${scoreLine}</p><p class="muted">档位线是真实历史控制线（${era.examYear} 年，已核实）。专业系数 k 由档位定。</p>`
+        : `<p>一段线 ${region.line1} · 特殊类型线 ${region.specialLine} · 二段线 ${region.line2} · ${region.batchName}每次最多 ${region.batchChoices} 个${region.batchUnit}。${scoreLine}</p>
+      <p class="muted">${esc(region.note)}</p>`}
       ${(g.bonus || 0) > 0 ? `<p class="warn">旧存档的广告加分（+${g.bonus}）已按新规则失效，分数恢复为封存原始分 ${g.base}。</p>` : ''}
       ${G.t1Diagnosing
         ? `<div class="card">${t1DiagnosisHtml()}<p><button class="opt" data-act="t1-diag-close">收起诊断</button></p></div>`
@@ -378,11 +487,11 @@ function screenT1() {
     </div>
     <h2>你的第一志愿</h2>
     <div class="options">
-      <button class="opt" data-act="t1-pick" data-id="obey"><b>听父母的</b><span>${tampered ? '第一志愿已经是省内师范。' : '按父母的意思，报省内师范。'}家庭线 +1，自主执念进度 −1。专业系数 k = 1.0。</span></button>
-      <button class="opt" data-act="t1-pick" data-id="insist"><b>坚持自己</b><span>就报你上面写的专业。分够参考线才能进，差分会调剂。家庭线 −1。专业系数 k = 1.3；家庭经济 ≤2 档时需自挣学费（T2–T5 每年 −1 AP）。</span></button>
-      <button class="opt" data-act="t1-pick" data-id="negotiate"><b>谈判，折中</b><span>还是报你写的专业，但 k = 1.0，留一个以后再谈的口子。</span></button>
+      <button class="opt" data-act="t1-pick" data-id="obey"><b>听父母的</b><span>${tampered ? '第一志愿已经是省内师范。' : '按父母的意思，报省内师范。'}家庭线 +1，自主执念进度 −1。${era ? 'k 由录取档位定。' : '专业系数 k = 1.0。'}</span></button>
+      <button class="opt" data-act="t1-pick" data-id="insist"><b>坚持自己</b><span>就报你上面写的专业。${era ? '录取看档位，不看专业。' : '分够参考线才能进，差分会调剂。'}家庭线 −1。${era ? 'k 由档位定；' : '专业系数 k = 1.3；'}家庭经济 ≤2 档时需自挣学费（T2–T5 每年 −1 AP）。</span></button>
+      <button class="opt" data-act="t1-pick" data-id="negotiate"><b>谈判，折中</b><span>还是报你写的专业，${era ? 'k 由档位定，' : '但 k = 1.0，'}留一个以后再谈的口子。</span></button>
     </div>
-    <p class="muted">承诺卡 A（志愿，T2–T4 兑现，T5 回顾）：专业锁定 8 年，决定专业成长系数 k。参考线是游戏内的简化线，不是真实投档线。</p>`);
+    <p class="muted">承诺卡 A（志愿，T2–T4 兑现，T5 回顾）：专业锁定 8 年，${era ? '专业系数 k 由录取档位定。档位线是真实历史控制线。' : '决定专业成长系数 k。参考线是游戏内的简化线，不是真实投档线。'}</p>`);
   const inp = $('#t1-major');
   if (inp) inp.addEventListener('input', () => { G.t1MajorDraft = inp.value; updateT1MajorLine(); });
   updateT1MajorLine();
@@ -397,8 +506,15 @@ function updateT1MajorLine() {
   if (!g) { el.textContent = ''; return; }
   const name = ($('#t1-major') ? $('#t1-major').value : '').trim();
   if (!name) { el.textContent = '先写专业，再看参考线。'; return; }
-  const line = majorAdmissionLine(name, g.line1);
   const eff = g.base || 0;
+  // v0.6: era runs have no per-major reference line (the fixed-offset
+  // formula is deleted) — the score maps to a tier, not to a major.
+  if (g.era) {
+    const hit = admissionTiers(g.row || {}).find((t) => eff >= t.line);
+    el.textContent = `没有按专业划的参考线了（v6 已删固定加分）：你的分数 ${eff}，落在「${hit ? hit.name : '落榜'}」档。专业只决定你学什么，不决定你上哪档。`;
+    return;
+  }
+  const line = majorAdmissionLine(name, g.line1);
   el.textContent = `${name}参考线 ${line}：你的分数 ${eff}，` + (eff >= line ? '达线。' : `差 ${line - eff} 分——点“志愿诊断”，看看够得着哪些专业。`);
 }
 
@@ -411,6 +527,22 @@ function t1DiagnosisHtml() {
   if (!s || !s.flags.gaokao) return '';
   const g = s.flags.gaokao;
   const eff = g.base || 0;
+  // v0.6: era diagnosis is tier-based — which tier the score lands in,
+  // and the 落榜 three-way. No per-major reference lines anymore.
+  if (g.era) {
+    const era = g.era;
+    const tiers = admissionTiers(g.row || {});
+    const hit = tiers.find((t) => eff >= t.line);
+    const lines = [`<p><b>志愿诊断</b>（只给信息，不改分数）</p>`,
+      `<p>你的封存分数 ${eff}，${(GAOKAO_REGIONS[g.region] || {}).name || g.region} ${era.examYear} 年高考 · ${EXAM_MODE_LABEL[era.mode]} · ${era.track}类。诊断不改分数，也不限次数。</p>`,
+      `<p>档位线（真实历史控制线，已核实）：${tiers.map((t) => `${t.name}线 ${t.line}（k = ${t.k}）`).join(' · ') || '无'}。</p>`,
+      `<p>你的分数落在「${hit ? hit.name : '落榜'}」档。${hit ? `专业系数 k = ${hit.k}。` : ''}</p>`];
+    if (!hit) {
+      lines.push('<p>落榜不是终点，选一条路：复读一年（明年再考）、等专科补录、或先工作一年。三条路都不改分数，签承诺卡 A 时再选。</p>');
+    }
+    lines.push('<p class="muted">档位线是真实历史控制线，不是游戏编的。重新评估的是志愿，不是分数。</p>');
+    return lines.join('');
+  }
   const line1 = g.line1 || 442;
   const inp = (typeof document !== 'undefined') ? document.querySelector('#t1-major') : null;
   const name = ((inp && inp.value) || G.t1MajorDraft || '').trim();
@@ -455,7 +587,9 @@ function pickT1(choice) {
     intended = wanted;
     source = 'self';
   }
-  const adm = resolveAdmission(s, intended, stanceK);
+  // v0.6: era runs resolve by tier (resolveEraAdmission); legacy runs
+  // keep the 2026 per-major resolver.
+  const adm = (s.flags.gaokao && s.flags.gaokao.era) ? resolveEraAdmission(s, intended) : resolveAdmission(s, intended, stanceK);
   if (choice === 'obey') { a.family += 1; s.flags.obsessionProgress = (s.flags.obsessionProgress || 0) - 1; }
   if (choice === 'insist') {
     a.family -= 1;
@@ -475,7 +609,9 @@ function pickT1(choice) {
     ${adm.note ? `<p>${esc(adm.note)}</p>` : ''}
     ${s.flags.selfFunded ? '<p>家庭经济 ≤2 档：自挣学费，T2–T5 每年 −1 AP。</p>' : ''}
     <p class="muted">征兆已记下，兑现那天会拿出来对照：你当时收到过什么信号、忽略了什么。</p></div>
-    <div class="actions"><button class="primary" data-act="year-start">进入 T2 · 19 岁</button></div>`);
+    ${adm.tier === '落榜'
+      ? `<div class="actions"><button class="primary" data-act="t1-fallback" data-id="repeat">复读一年</button><button data-act="t1-fallback" data-id="vocational">等专科补录</button><button data-act="t1-fallback" data-id="work">先工作一年</button></div>`
+      : `<div class="actions"><button class="primary" data-act="year-start">进入 T2 · 19 岁</button></div>`}`);
 }
 
 // ---------- yearly loop T2–T8 ----------
@@ -976,7 +1112,20 @@ document.addEventListener('click', (e) => {
       autosave('就这样，已记录');
       screenTransition();
       break;
+    case 'era-year-pick': pickEraYear(id); break;
     case 't1-region-pick': pickT1Region(id); break;
+    case 't1-era-region-pick': screenT1Track(id); break;
+    case 't1-track-pick': {
+      const [regionId, track] = String(id).split('|');
+      pickT1Track(regionId, track);
+      break;
+    }
+    case 't1-fallback': {
+      G.state.flags.fallbackChoice = id;
+      autosave('落榜去向：' + id);
+      startYear(2);
+      break;
+    }
     case 't1-major-chip': {
       const inp = $('#t1-major');
       if (inp) inp.value = id;
