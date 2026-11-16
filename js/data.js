@@ -189,10 +189,54 @@ const YEAR_EVENTS = [
     { text: '去复查，花半天时间', fx: { health: 3, stress: 2, money: -1 }, omen: '复查那天，医生说你来得正是时候。' },
     { text: '先放着，等有空再说', fx: { health: -3 }, omen: '那张报告你夹进了抽屉，没再打开过。' },
   ]},
-  { id: 'ev-idea', title: '你有个赚钱的点子', body: '一个 AI 求职助手，帮人改简历、模拟面试。做起来要时间、要钱、要人。', options: [
-    { text: '先做个最小版本试试', fx: { money: -2, skill: 3, stress: 5 }, omen: '你写下第一行代码的那天晚上，停电了。' },
-    { text: '先记下来，等准备好了再说', fx: {}, omen: '这个点子在你的备忘录里躺了很久。' },
-  ]},
+  { id: 'ev-idea', input: true, title: '你有个赚钱的点子', body: '写下来，系统会按你的想法生成一条专属的线：启动成本、里程碑、风险与回报。做起来要时间、要钱、要人——但这条线是你自己的。', placeholder: '比如：我想创业做一个 AI 求职助手，帮人改简历、模拟面试。' },
+];
+
+// 赚钱点子的专属线：自由输入 → 关键词分类 → 一条可经营的项目线。
+// 每条线 3 个里程碑，每年花 1 AP 推进，结算时掷骰判定；跑通后每年稳定 +2 万。
+const VENTURE_ARCHETYPES = [
+  { id: 'ai-tool', name: 'AI 工具创业', cost: 2, risk: '技术迭代快，获客成本高。',
+    keys: ['ai', '人工智能', '智能', '求职', '简历', '面试', '助手', '工具', 'app', '小程序', '软件', '程序'],
+    milestones: [
+      { name: '做出最小版本', reward: { skill: 3 } },
+      { name: '找到 100 个真实用户', reward: { influence: 6 } },
+      { name: '收到第一笔付费', reward: { money: 6 } },
+    ] },
+  { id: 'content', name: '内容 / 自媒体', cost: 1, risk: '平台规则一变，流量就没了。',
+    keys: ['视频', '直播', '公众号', '小红书', '抖音', '博主', '写作', '拍视频', '内容', '账号', '粉丝'],
+    milestones: [
+      { name: '连续更新 30 天', reward: { influence: 4 } },
+      { name: '第一篇 10w+', reward: { influence: 8 } },
+      { name: '接到第一个商单', reward: { money: 4 } },
+    ] },
+  { id: 'opensrc', name: '开源项目', cost: 0, risk: '维护成本高，没有直接收入。',
+    keys: ['开源', 'github', '代码', '库', '框架', '插件', '工具库'],
+    milestones: [
+      { name: '发布 1.0', reward: { influence: 4 } },
+      { name: '拿到 100 star', reward: { influence: 6, network: 3 } },
+      { name: '被社区 / 大厂采用', reward: { network: 5, influence: 5 } },
+    ] },
+  { id: 'ecommerce', name: '电商 / 带货', cost: 3, risk: '压货风险，平台扣点。',
+    keys: ['电商', '带货', '淘宝', '拼多多', '卖货', '开店', '选品', '进货'],
+    milestones: [
+      { name: '上架第一批货', reward: { money: 2 } },
+      { name: '月销破 100 单', reward: { money: 5 } },
+      { name: '做出一个爆款', reward: { money: 8, influence: 4 } },
+    ] },
+  { id: 'service', name: '技能服务 / 接单', cost: 0, risk: '时间换钱，天花板低。',
+    keys: ['接单', '家教', '设计', '翻译', '咨询', '摄影', '写稿', '兼职'],
+    milestones: [
+      { name: '接到第一单', reward: { money: 2 } },
+      { name: '攒下 5 个回头客', reward: { money: 3, network: 3 } },
+      { name: '时薪翻倍', reward: { money: 5 } },
+    ] },
+  { id: 'generic', name: '创业项目', cost: 2, risk: '方向不明，先跑起来再说。',
+    keys: [],
+    milestones: [
+      { name: '做出最小版本', reward: { skill: 3 } },
+      { name: '找到第一批用户', reward: { influence: 4 } },
+      { name: '收支打平', reward: { money: 5 } },
+    ] },
 ];
 
 // T5 毕业去向 (承诺 B). offer tier formula in engine.js.
@@ -239,5 +283,5 @@ const T9_SLICE = {
 };
 
 if (typeof module !== 'undefined') {
-  module.exports = { DIFFICULTIES, OBSESSIONS, FAMILIES, TAG_KEYWORDS, ACTIONS, YEAR_EVENTS, T5_JOBS, T9_SLICE };
+  module.exports = { DIFFICULTIES, OBSESSIONS, FAMILIES, TAG_KEYWORDS, ACTIONS, YEAR_EVENTS, T5_JOBS, T9_SLICE, VENTURE_ARCHETYPES };
 }

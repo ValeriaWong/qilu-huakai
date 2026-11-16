@@ -42,6 +42,8 @@ function newRun(seed, opts) {
     flags: {},          // arbitrary booleans: e.g. acceptedFate, usedRewrite
     yearlyLog: [],      // settlement cards
     decisions: {},      // T9 slice decisions
+    ventures: [],       // 赚钱点子的专属线（可经营项目）
+    ideaNotes: [],      // 记下来、还没开始的点子
     finished: false,
     createdAt: new Date().toISOString(),
   };
@@ -210,6 +212,83 @@ function tierLabel(pct) {
   return '有戏';
 }
 
+// ---- ventures: free-input money idea -> a dedicated, operable line ----
+// Classification is keyword-based (the design doc's intent-classification
+// fallback): the player's own words pick the archetype; unmatched input
+// falls through to the generic archetype, never to a dead end.
+function classifyVenture(text, archetypes) {
+  const t = String(text || '').toLowerCase();
+  let best = null, bestScore = 0;
+  for (const a of archetypes) {
+    let score = 0;
+    for (const k of (a.keys || [])) if (k && t.includes(k.toLowerCase())) score += 1;
+    if (score > bestScore) { bestScore = score; best = a; }
+  }
+  return best || archetypes.find((a) => a.id === 'generic') || archetypes[0];
+}
+
+function startVenture(state, text, archetype) {
+  const a = state.attrs;
+  if (a.money < archetype.cost) {
+    return { ok: false, error: `启动要 ${archetype.cost} 万，你现在只有 ${a.money} 万。先攒钱（兼职 / 副业），或者先记下来。` };
+  }
+  a.money -= archetype.cost;
+  const short = String(text).trim().slice(0, 12);
+  const v = {
+    id: 'v' + Date.now().toString(36),
+    name: archetype.name + '：' + short,
+    archetype: archetype.id,
+    text: String(text).trim().slice(0, 200),
+    stage: 0,
+    status: 'active',
+    createdTurn: state.turn,
+  };
+  state.ventures = state.ventures || [];
+  state.ventures.push(v);
+  return { ok: true, venture: v };
+}
+
+const REWARD_NAMES = { money: '钱', skill: '专业', express: '表达', network: '人脉', influence: '影响力', health: '健康' };
+function rewardText(reward) {
+  return Object.entries(reward || {})
+    .map(([k, v]) => `${REWARD_NAMES[k] || k} ${v > 0 ? '+' : ''}${v}${k === 'money' ? ' 万' : ''}`)
+    .join('，');
+}
+
+// Resolve one venture for a year. `advanced` = the player spent 1 AP on it
+// this year; a running venture pays its passive income regardless.
+function resolveVentureYear(state, rng, venture, archetype, advanced) {
+  const lines = [];
+  const a = state.attrs;
+  if (venture.status === 'running') {
+    a.money += 2;
+    lines.push(`「${venture.name}」已经跑起来了，本年稳定收入 +2 万。`);
+    return lines;
+  }
+  if (!advanced) {
+    lines.push(`「${venture.name}」今年没推进，停在原地（里程碑 ${venture.stage}/${archetype.milestones.length}）。`);
+    return lines;
+  }
+  const ms = archetype.milestones[venture.stage];
+  if (!ms) return lines;
+  const chance = Math.max(30, Math.min(90, Math.round(55 + a.skill * 0.2 + a.network * 0.1)));
+  const roll = rng.int(1, 100);
+  if (roll <= chance) {
+    for (const [k, v] of Object.entries(ms.reward || {})) a[k] = (a[k] || 0) + v;
+    venture.stage += 1;
+    lines.push(`「${venture.name}」里程碑达成：${ms.name}（掷出 ${roll} ≤ ${chance}）。${rewardText(ms.reward)}。`);
+    if (venture.stage >= archetype.milestones.length) {
+      venture.status = 'running';
+      a.money += 5; a.influence += 5;
+      lines.push(`「${venture.name}」跑起来了：收支打平，开始稳定赚钱（钱 +5 万，影响力 +5）。以后每年 +2 万。`);
+    }
+  } else {
+    if (a.money >= 1) a.money -= 1; else a.stress += 5;
+    lines.push(`「${venture.name}」里程碑受挫：${ms.name}（掷出 ${roll} > ${chance}）。亏了 1 万，进度停在原地。`);
+  }
+  return lines;
+}
+
 if (typeof module !== 'undefined') {
-  module.exports = { SAVE_KEY, META_KEY, blankAttrs, newRun, saveGame, loadGame, clearSave, exportCode, importCode, loadMeta, saveMeta, pressureTier, settleYear, sealDie, offerTier, layoffChance, gambleChance, tierLabel };
+  module.exports = { SAVE_KEY, META_KEY, blankAttrs, newRun, saveGame, loadGame, clearSave, exportCode, importCode, loadMeta, saveMeta, pressureTier, settleYear, sealDie, offerTier, layoffChance, gambleChance, tierLabel, classifyVenture, startVenture, resolveVentureYear, rewardText };
 }

@@ -360,6 +360,41 @@ function pickT1(choice) {
 }
 
 // ---------- yearly loop T2–T8 ----------
+function eventCardHtml(ev, s) {
+  const done = !!s.flags.eventChoice;
+  if (done) {
+    return `<div class="card"><h2>${esc(ev.title)}</h2><p>${esc(ev.body)}</p><p class="muted">（事件已选，见结算卡。）</p></div>`;
+  }
+  if (ev.input) {
+    return `<div class="card"><h2>${esc(ev.title)}</h2><p>${esc(ev.body)}</p>
+      <textarea id="idea-text" rows="3" placeholder="${esc(ev.placeholder || '写下你的点子……')}"></textarea>
+      <p class="muted" id="idea-hint">写完点「开始这条线」，系统会按你的想法生成专属线（启动成本、里程碑、风险）。钱不够可以先记下来。</p>
+      <div class="actions"><button class="primary" data-act="idea-start">开始这条线</button><button data-act="idea-note">先记下来</button></div>
+    </div>`;
+  }
+  return `<div class="card"><h2>${esc(ev.title)}</h2><p>${esc(ev.body)}</p>
+    <div class="options">${ev.options.map((o, i) => `<button class="opt" data-act="event-pick" data-id="${i}">${esc(o.text)}</button>`).join('')}</div>
+  </div>`;
+}
+
+function venturePanelHtml(s) {
+  const vs = (s.ventures || []).filter((v) => v.status !== 'done');
+  if (!vs.length) return '';
+  return `<div class="card"><h2>我的项目</h2>` + vs.map((v) => {
+    const arch = VENTURE_ARCHETYPES.find((a) => a.id === v.archetype);
+    if (!arch) return '';
+    const next = v.status === 'running' ? '已跑通，每年 +2 万' : `下一里程碑：${esc(arch.milestones[v.stage].name)}（${v.stage}/${arch.milestones.length}）`;
+    return `<p><b>${esc(v.name)}</b> · ${next}<br><span class="muted">风险：${esc(arch.risk)}</span></p>`;
+  }).join('') + `</div>`;
+}
+
+function ventureActionHtml(s) {
+  const v = (s.ventures || []).find((x) => x.status === 'active');
+  if (!v) return '';
+  const used = s.flags.advancedVenture === v.id;
+  return `<button class="opt" data-act="venture-advance" ${s.ap < 1 || used ? 'disabled' : ''}><b>推进项目：${esc(v.name)}</b><span>1 AP。今年结算时掷骰判定里程碑。${used ? '（今年已推进）' : ''}</span></button>`;
+}
+
 function startYear(turn) {
   const s = G.state;
   s.turn = turn;
@@ -397,11 +432,10 @@ function startYear(turn) {
     <h1>T${turn} · ${17 + turn} 岁</h1>
     <p class="muted">本年 AP：${s.ap}。每年只能选 3 件，这是全游戏的取舍。</p>
     ${s.flags.industryDown ? '<p class="warn">行业下行期：薪资判定 −20%，晋升成功率 −15%。</p>' : ''}
-    <div class="card"><h2>${esc(ev.title)}</h2><p>${esc(ev.body)}</p>
-      <div class="options">${ev.options.map((o, i) => `<button class="opt" data-act="event-pick" data-id="${i}">${esc(o.text)}</button>`).join('')}</div>
-    </div>
+    ${eventCardHtml(ev, s)}
+    ${venturePanelHtml(s)}
     <h2>今年的行动（${s.ap} AP）</h2>
-    <div class="options">${ACTIONS.map((ac) => `<button class="opt" data-act="action" data-id="${ac.id}" ${s.ap < ac.ap ? 'disabled' : ''}><b>${ac.name}</b><span>${ac.desc}</span></button>`).join('')}</div>
+    <div class="options">${ventureActionHtml(s)}${ACTIONS.map((ac) => `<button class="opt" data-act="action" data-id="${ac.id}" ${s.ap < ac.ap ? 'disabled' : ''}><b>${ac.name}</b><span>${ac.desc}</span></button>`).join('')}</div>
     <div class="actions"><button class="primary" data-act="year-end">结束这一年 → 结算</button></div>`);
 }
 
@@ -433,17 +467,13 @@ function startYearRefresh() {
   const s = G.state;
   const turn = s.turn;
   const ev = s.currentEvent;
-  const eventDone = !!s.flags.eventChoice;
   setScreen(`
     <h1>T${turn} · ${17 + turn} 岁</h1>
     <p class="muted">本年 AP：${s.ap}。已选：${s.yearActions.join('、') || '无'}</p>
-    <div class="card"><h2>${esc(ev.title)}</h2><p>${esc(ev.body)}</p>
-      ${eventDone
-        ? '<p class="muted">（事件已选，见结算卡。）</p>'
-        : `<div class="options">${ev.options.map((o, i) => `<button class="opt" data-act="event-pick" data-id="${i}">${esc(o.text)}</button>`).join('')}</div>`}
-    </div>
+    ${eventCardHtml(ev, s)}
+    ${venturePanelHtml(s)}
     <h2>今年的行动（${s.ap} AP）</h2>
-    <div class="options">${ACTIONS.map((ac) => `<button class="opt" data-act="action" data-id="${ac.id}" ${s.ap < ac.ap ? 'disabled' : ''}><b>${ac.name}</b><span>${ac.desc}</span></button>`).join('')}</div>
+    <div class="options">${ventureActionHtml(s)}${ACTIONS.map((ac) => `<button class="opt" data-act="action" data-id="${ac.id}" ${s.ap < ac.ap ? 'disabled' : ''}><b>${ac.name}</b><span>${ac.desc}</span></button>`).join('')}</div>
     <div class="actions"><button class="primary" data-act="year-end">结束这一年 → 结算</button></div>`);
 }
 
@@ -459,6 +489,16 @@ function pickEvent(i) {
 
 function endYear() {
   const s = G.state;
+  // Ventures resolve before the yearly settlement: running lines pay
+  // passively; the line the player pushed this year rolls its milestone.
+  const ventureLines = [];
+  for (const v of (s.ventures || [])) {
+    const arch = VENTURE_ARCHETYPES.find((a) => a.id === v.archetype);
+    if (!arch) continue;
+    ventureLines.push(...resolveVentureYear(s, G.rng, v, arch, s.flags.advancedVenture === v.id));
+  }
+  s.flags.advancedVenture = null;
+  s.rngState = G.rng.getState();
   const res = settleYear(s, DIFFICULTIES[s.difficulty]);
   const a = s.attrs;
   const brief = `${17 + s.turn} 岁这一年，你${s.yearActions.join('、') || '没做什么特别的事'}。${s.flags.eventChoice || ''}`;
@@ -472,6 +512,7 @@ function endYear() {
       <div><b>属性变化</b><p>压力 ${res.before.stress} → ${a.stress}（${res.tier === 'calm' ? '稳' : res.tier === 'tense' ? '紧绷' : '崩'}），健康 ${res.before.health} → ${a.health}，钱 ${res.before.money} → ${a.money} 万，Debt ${res.before.debt} → ${a.debt}</p></div>
       <div><b>人生简报</b><p>${esc(brief)}</p></div>
       <div><b>被记下的征兆</b><p>${esc(s.omenLog.filter((o) => o.turn === s.turn).map((o) => o.text).join(' ') || '今年没有征兆。')}</p></div>
+      ${ventureLines.length ? `<div><b>我的项目</b><p>${esc(ventureLines.join(' '))}</p></div>` : ''}
     </div>
     ${next <= 8 ? `<div class="actions"><button class="primary" data-act="year-next" data-id="${next}">进入 T${next} · ${17 + next} 岁</button></div>`
       : `<div class="actions"><button class="primary" data-act="to-slice">进入 T9 · 26 岁裁员之夜</button></div>`}`);
@@ -675,6 +716,49 @@ document.addEventListener('click', (e) => {
     case 'year-start': startYear(2); break;
     case 'year-next': startYear(Number(id)); break;
     case 'event-pick': pickEvent(Number(id)); break;
+    case 'idea-start': {
+      const text = ($('#idea-text').value || '').trim();
+      if (text.length < 2) { alert('先写一句你的点子。'); break; }
+      const arch = classifyVenture(text, VENTURE_ARCHETYPES);
+      const r = startVenture(G.state, text, arch);
+      if (!r.ok) { const h = $('#idea-hint'); if (h) h.textContent = r.error; break; }
+      const v = r.venture;
+      G.state.flags.eventChoice = '赚钱点子 → 开始了「' + v.name + '」';
+      G.state.omenLog.push({ turn: G.state.turn, text: '你写下第一行计划的那天晚上，停电了。' });
+      autosave('专属线已生成');
+      setScreen(`
+        <h1>专属线已生成</h1>
+        <div class="card big"><h2>${esc(v.name)}</h2>
+          <p>${esc(arch.name)} · 启动 ${arch.cost} 万已付 · 风险：${esc(arch.risk)}</p>
+          <p>里程碑：${arch.milestones.map((m, i) => `${i + 1}. ${esc(m.name)}（${esc(rewardText(m.reward))}）`).join('；')}</p>
+          <p class="muted">你的原话写进了这条线：“${esc(v.text.slice(0, 60))}”。每年花 1 AP 推进，结算时掷骰判定；跑通后每年稳定 +2 万。</p>
+        </div>
+        <div class="actions"><button class="primary" data-act="year-refresh">回到今年</button></div>`);
+      break;
+    }
+    case 'idea-note': {
+      const text = ($('#idea-text').value || '').trim();
+      if (text.length < 2) { alert('先写一句你的点子。'); break; }
+      G.state.ideaNotes = G.state.ideaNotes || [];
+      G.state.ideaNotes.push({ turn: G.state.turn, text: text.slice(0, 200) });
+      G.state.flags.eventChoice = '赚钱点子 → 先记下来了';
+      autosave('点子已记下');
+      startYearRefresh();
+      break;
+    }
+    case 'venture-advance': {
+      const s = G.state;
+      const v = (s.ventures || []).find((x) => x.status === 'active');
+      if (!v || s.ap < 1 || s.flags.advancedVenture) break;
+      s.ap -= 1;
+      s.attrs.stress += 3;
+      s.flags.advancedVenture = v.id;
+      s.yearActions.push('推进项目：' + v.name);
+      autosave();
+      startYearRefresh();
+      break;
+    }
+    case 'year-refresh': startYearRefresh(); break;
     case 'action': applyAction(id); break;
     case 'year-end': endYear(); break;
     case 't5-pick': pickT5(id); break;
