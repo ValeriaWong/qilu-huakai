@@ -76,25 +76,34 @@ function playableBirthYears() {
   }
   return years;
 }
+// Compact label for the S0.5 screen, e.g. "1992–2004 年、2008 年".
+function playableBirthYearsLabel() {
+  const ys = playableBirthYears();
+  if (!ys.length) return '暂无可玩年份';
+  const groups = [];
+  let start = ys[0], prev = ys[0];
+  for (let i = 1; i <= ys.length; i++) {
+    if (i < ys.length && ys[i] === prev + 1) { prev = ys[i]; continue; }
+    groups.push(start === prev ? String(start) : start + '–' + prev);
+    if (i < ys.length) { start = ys[i]; prev = ys[i]; }
+  }
+  return groups.map((g) => g + ' 年').join('、');
+}
 
 // ---- admission tiers (v6 Q3: k = study-environment coefficient) ----
-// split years: 一本 1.30 / 二本 1.10 / 三本 0.95 (only when the tier3 line
-// exists) / 专科 0.80 (only when a vocational line exists).
-// merged / new33 years: a single 本科 tier at 1.10 + 专科 0.80 if present.
-// (School-tier differentiation inside merged 本科 is P1 work, not a
-// resurrected 一本线 — see design doc v6.)
+// Driven by which lines actually exist, not by the regime label:
+// tier1 present -> 一本 1.30; tier2 present -> 二本 1.10 when a tier1
+// exists, else 本科 1.10 (merged / new33 / 3+1+2 single line); tier3
+// present -> 三本 0.95; vocational present -> 专科 0.80.
+// (吉林 2019 is split with tier1+tier2 and no tier3: 一本 + 二本,
+// no 三本 — the 2019 merger was 二本+三本, not 一本+二本.)
 const ERA_TIER_K = { '一本': 1.30, '二本': 1.10, '三本': 0.95, '本科': 1.10, '专科': 0.80 };
 function admissionTiers(row) {
   if (!row) return [];
   const tiers = [];
-  if (row.regime === 'split') {
-    if (typeof row.tier1 === 'number') tiers.push({ name: '一本', line: row.tier1, k: 1.30 });
-    if (typeof row.tier2 === 'number') tiers.push({ name: '二本', line: row.tier2, k: 1.10 });
-    if (typeof row.tier3 === 'number') tiers.push({ name: '三本', line: row.tier3, k: 0.95 });
-  } else {
-    // merged / new33 (regime may be null for to_verify rows — same shape)
-    if (typeof row.tier2 === 'number') tiers.push({ name: '本科', line: row.tier2, k: 1.10 });
-  }
+  if (typeof row.tier1 === 'number') tiers.push({ name: '一本', line: row.tier1, k: 1.30 });
+  if (typeof row.tier2 === 'number') tiers.push({ name: (typeof row.tier1 === 'number') ? '二本' : '本科', line: row.tier2, k: 1.10 });
+  if (typeof row.tier3 === 'number') tiers.push({ name: '三本', line: row.tier3, k: 0.95 });
   if (typeof row.vocational === 'number') tiers.push({ name: '专科', line: row.vocational, k: 0.80 });
   return tiers;
 }
@@ -129,6 +138,6 @@ if (typeof module !== 'undefined') {
     ERA_HISTORY_PACK_MAX, examYearForBirth, birthYearForExam, calendarYearForTurn,
     ageForTurn, settlementYear, t9Year, isHistoryPack, getExamMode, EXAM_MODE_LABEL,
     ERA_TRACKS, tracksForMode, lookupLine, undergradLine, isLinePlayable,
-    playableBirthYears, ERA_TIER_K, admissionTiers, resolveEraAdmission,
+    playableBirthYears, playableBirthYearsLabel, ERA_TIER_K, admissionTiers, resolveEraAdmission,
   };
 }
