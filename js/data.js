@@ -330,6 +330,38 @@ const THEME_KEYWORDS = [
   { keys: ['音乐', '唱歌'], tag: '音乐' },
 ];
 
+// Gaokao regions (v0.4). Start with Shandong — the game is named Qilu.
+// Policy verified 2026-11-16 from the 2026 Shandong admission rules
+// (省招考院 2026-06-25: 特招线 525, 一段线 442, 二段线 150) and the 2026
+// 夏季高考工作实施办法: 3+3, 750 total, 常规批 96 parallel
+// "专业+学校" choices, 特殊类型批 cancelled from 2026. These lines are
+// REAL 2026 numbers. Per-major lines below are GAME reference lines
+// (offsets above 一段线), not real admission data. Add a province by
+// adding one entry here.
+const GAOKAO_REGIONS = {
+  shandong: {
+    id: 'shandong', name: '山东', year: 2026,
+    model: '3+3', total: 750,
+    line1: 442, specialLine: 525, line2: 150,
+    batchChoices: 96,
+    note: '普通类分提前批+常规批；2026年起取消特殊类型批；常规批3次填报，每次最多96个“专业+学校”平行志愿；一段线按本科计划1:1.2划定。',
+  },
+};
+const GAOKAO_DEFAULT_REGION = 'shandong';
+// Major reference lines: offset above 一段线. Game simplification, NOT
+// real admission data. 艺术设计 sits on 一段线 so a player above the
+// line always has at least one reachable major (the 调剂 floor).
+const MAJOR_LINE_OFFSETS = {
+  '临床医学': 160, '计算机': 140, '金融': 120, '法学': 110, '会计': 90,
+  '新闻传播': 70, '师范': 70, '土木': 50, '英语': 50, '艺术设计': 0,
+};
+const MAJOR_LINE_DEFAULT_OFFSET = 60;
+// Ad boost: +10 per watch, max 3 watches per run (+30 max). Simulated
+// 5s view in the demo (no real ad SDK wired); labelled 演示版 in the UI.
+const AD_BOOST_POINTS = 10;
+const AD_BOOST_MAX = 3;
+const AD_VIEW_MS = 5000;
+
 // T1 major quick picks (tap to fill the input; the player may also type
 // any major). The only major word the game showed before v0.3.1 was 会计,
 // and only as a childhood omen line ("你妈说隔壁家孩子学了会计") —
@@ -385,5 +417,5 @@ const T9_SLICE = {
 };
 
 if (typeof module !== 'undefined') {
-  module.exports = { DIFFICULTIES, OBSESSIONS, FAMILIES, TAG_KEYWORDS, ACTIONS, YEAR_EVENTS, T1_MAJORS, T5_JOBS, T9_SLICE, VENTURE_ARCHETYPES, THEME_KEYWORDS };
+  module.exports = { DIFFICULTIES, OBSESSIONS, FAMILIES, TAG_KEYWORDS, ACTIONS, YEAR_EVENTS, T1_MAJORS, GAOKAO_REGIONS, GAOKAO_DEFAULT_REGION, MAJOR_LINE_OFFSETS, MAJOR_LINE_DEFAULT_OFFSET, AD_BOOST_POINTS, AD_BOOST_MAX, AD_VIEW_MS, T5_JOBS, T9_SLICE, VENTURE_ARCHETYPES, THEME_KEYWORDS };
 }

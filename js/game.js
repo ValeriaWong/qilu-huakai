@@ -320,9 +320,31 @@ function screenT1() {
   s.turn = 1; s.ap = 3;
   const h0 = s.sealed.H0;
   const tampered = h0 && h0.value >= 60;
+  // v0.4: the Gaokao score is a sealed die, rolled once on first entry
+  // (420–660) and stored on flags — revisits never re-roll it.
+  if (!s.flags.gaokao) {
+    const region = GAOKAO_REGIONS[GAOKAO_DEFAULT_REGION];
+    s.flags.gaokao = { region: region.id, base: G.rng.int(420, 660), bonus: 0, adsWatched: 0, line1: region.line1, specialLine: region.specialLine };
+    s.rngState = G.rng.getState();
+    autosave('高考出分');
+  }
+  const g = s.flags.gaokao;
+  const region = GAOKAO_REGIONS[g.region] || GAOKAO_REGIONS[GAOKAO_DEFAULT_REGION];
+  const eff = g.base + g.bonus;
+  const scoreLine = eff >= g.specialLine ? '已过特殊类型线。' : eff >= g.line1 ? '已过一段线，未过特殊类型线。' : '未过一段线。';
   setScreen(`
     <h1>T1 · 18 岁 · 高考志愿填报</h1>
     <p class="intro">选专业时，有的父母会阻止你报想报的专业，有的不会——从这里开始，你自己做决定。</p>
+    <div class="card">
+      <p><b>高考总分：${eff}</b>（原始分 ${g.base} + 广告提分 ${g.bonus}）· ${region.name} ${region.year} · ${region.model} · 总分 ${region.total}</p>
+      <p>一段线 ${region.line1} · 特殊类型线 ${region.specialLine} · 二段线 ${region.line2} · 常规批每次最多 ${region.batchChoices} 个“专业+学校”平行志愿。${scoreLine}</p>
+      <p class="muted">${esc(region.note)}</p>
+      ${G.t1AdViewing
+        ? '<p class="muted">广告播放中（演示版 5 秒），看完 +10 分…</p>'
+        : g.adsWatched < AD_BOOST_MAX
+          ? `<button class="opt" data-act="t1-ad">看广告提分（+${AD_BOOST_POINTS} 分，本局还能看 ${AD_BOOST_MAX - g.adsWatched} 次 · 演示版，未接真实广告）</button>`
+          : '<p class="muted">广告提分已用完（本局最多 3 次，共 +30 分）。</p>'}
+    </div>
     <div class="card">
       <p><b>家庭兜底：</b>${esc(s.flags.familySafety || '')}</p>
       <p><b>征兆：</b>${h0 ? h0.omens.map((o) => esc(o.text)).join(' ') : ''}</p>
@@ -330,49 +352,83 @@ function screenT1() {
     </div>
     <h2>你想报的专业</h2>
     <div class="card">
-      <p><input id="t1-major" type="text" placeholder="输入你想报的专业，比如：计算机、临床医学、会计……" maxlength="20"></p>
+      <p><input id="t1-major" type="text" placeholder="输入你想报的专业，比如：计算机、临床医学、会计……" maxlength="20" value="${esc(G.t1MajorDraft || '')}"></p>
+      <p id="t1-major-line"></p>
       <p class="muted">点一个填进去，也可以自己写：</p>
       <div class="options">${T1_MAJORS.map((m) => `<button class="opt" data-act="t1-major-chip" data-id="${esc(m)}">${esc(m)}</button>`).join('')}</div>
     </div>
     <h2>你的第一志愿</h2>
     <div class="options">
       <button class="opt" data-act="t1-pick" data-id="obey"><b>听父母的</b><span>${tampered ? '第一志愿已经是省内师范。' : '按父母的意思，报省内师范。'}家庭线 +1，自主执念进度 −1。专业系数 k = 1.0。</span></button>
-      <button class="opt" data-act="t1-pick" data-id="insist"><b>坚持自己</b><span>就报你上面写的专业。家庭线 −1。专业系数 k = 1.3；家庭经济 ≤2 档时需自挣学费（T2–T5 每年 −1 AP）。</span></button>
+      <button class="opt" data-act="t1-pick" data-id="insist"><b>坚持自己</b><span>就报你上面写的专业。分够参考线才能进，差分会调剂。家庭线 −1。专业系数 k = 1.3；家庭经济 ≤2 档时需自挣学费（T2–T5 每年 −1 AP）。</span></button>
       <button class="opt" data-act="t1-pick" data-id="negotiate"><b>谈判，折中</b><span>还是报你写的专业，但 k = 1.0，留一个以后再谈的口子。</span></button>
     </div>
-    <p class="muted">承诺卡 A（志愿，T2–T4 兑现，T5 回顾）：专业锁定 8 年，决定专业成长系数 k。</p>`);
+    <p class="muted">承诺卡 A（志愿，T2–T4 兑现，T5 回顾）：专业锁定 8 年，决定专业成长系数 k。参考线是游戏内的简化线，不是真实投档线。</p>`);
+  const inp = $('#t1-major');
+  if (inp) inp.addEventListener('input', () => { G.t1MajorDraft = inp.value; updateT1MajorLine(); });
+  updateT1MajorLine();
+}
+
+// Live feedback for the typed/picked major: its reference line vs the score.
+function updateT1MajorLine() {
+  const s = G && G.state;
+  const el = $('#t1-major-line');
+  if (!s || !el) return;
+  const g = s.flags.gaokao;
+  if (!g) { el.textContent = ''; return; }
+  const name = ($('#t1-major') ? $('#t1-major').value : '').trim();
+  if (!name) { el.textContent = '先写专业，再看参考线。'; return; }
+  const line = majorAdmissionLine(name, g.line1);
+  const eff = g.base + g.bonus;
+  el.textContent = `${name}参考线 ${line}：你的分数 ${eff}，` + (eff >= line ? '达线。' : `差 ${line - eff} 分——可以看广告提分，或换个分低的专业。`);
+}
+
+// v0.4: the ad finishes (5s simulated view in the demo). Bonus is sealed
+// in state and survives reloads.
+function completeAdBoost() {
+  const s = G && G.state;
+  if (!s || !s.flags.gaokao) return;
+  const g = s.flags.gaokao;
+  if (g.adsWatched >= AD_BOOST_MAX) { G.t1AdViewing = false; return; }
+  g.bonus += AD_BOOST_POINTS;
+  g.adsWatched += 1;
+  G.t1AdViewing = false;
+  autosave('看广告提分');
+  screenT1();
 }
 
 function pickT1(choice) {
   const s = G.state, a = s.attrs;
   const wanted = ($('#t1-major') ? $('#t1-major').value : '').trim().slice(0, 20);
-  const k = { obey: 1.0, insist: 1.3, negotiate: 1.0 }[choice];
+  const stanceK = { obey: 1.0, insist: 1.3, negotiate: 1.0 }[choice];
   const stance = { obey: '听父母的', insist: '坚持自己', negotiate: '谈判折中' }[choice];
-  let major, source;
+  let intended, source;
   if (choice === 'obey') {
-    major = '省内师范';
+    intended = '省内师范';
     source = 'parents';
   } else {
     if (!wanted) { alert('先写你想报的专业，再选这个。'); return; }
-    major = wanted;
+    intended = wanted;
     source = 'self';
   }
+  const adm = resolveAdmission(s, intended, stanceK);
   if (choice === 'obey') { a.family += 1; s.flags.obsessionProgress = (s.flags.obsessionProgress || 0) - 1; }
   if (choice === 'insist') {
     a.family -= 1;
     if (s.origin.attrs.money <= 2) { s.flags.selfFunded = true; }
   }
-  s.major = { name: major, source };
-  s.flags.majorK = k;
+  s.major = { name: adm.major, source, tier: adm.tier };
+  s.flags.majorK = adm.k;
   s.commitments.A = {
-    text: '志愿：' + major + '（' + stance + '）',
+    text: '志愿：' + adm.major + '（' + stance + '，' + adm.tier + '）',
     signedAt: 'T1', dueTurn: 4,
-    snapshot: { skill: a.skill, express: a.express, network: a.network, family: a.family, k, major },
+    snapshot: { skill: a.skill, express: a.express, network: a.network, family: a.family, k: adm.k, major: adm.major, tier: adm.tier },
   };
   autosave('承诺 A 已签署并封存');
   setScreen(`
     <h1>承诺卡 A 已签署</h1>
-    <div class="card"><p>你的专业：<b>${esc(major)}</b>（${stance}）。专业系数 k = ${k}，T2–T4 兑现，T5 回顾。骰子已封存，兑现时只读档、不重掷。</p>
+    <div class="card"><p>你的专业：<b>${esc(adm.major)}</b>（${stance} · ${adm.tier}）。专业系数 k = ${adm.k}，T2–T4 兑现，T5 回顾。骰子已封存，兑现时只读档、不重掷。</p>
+    ${adm.note ? `<p>${esc(adm.note)}</p>` : ''}
     ${s.flags.selfFunded ? '<p>家庭经济 ≤2 档：自挣学费，T2–T5 每年 −1 AP。</p>' : ''}
     <p class="muted">征兆已记下，兑现那天会拿出来对照：你当时收到过什么信号、忽略了什么。</p></div>
     <div class="actions"><button class="primary" data-act="year-start">进入 T2 · 19 岁</button></div>`);
@@ -569,7 +625,7 @@ function screenT5() {
   const s = G.state;
   setScreen(`
     <h1>T5 · 22 岁 · 毕业去向</h1>
-    <p class="intro">承诺卡 A（志愿）已在 T4 兑现——回头看，18 岁的选择把你带到了这里。你的专业是 <b>${esc(s.major ? s.major.name : '（旧存档，未记录）')}</b>，专业系数 k = ${s.flags.majorK}，起点已定。同时签下承诺卡 B：第一份工作，锁定城市 × 行业，后续 80% 的机会只从这条线长出来。</p>
+    <p class="intro">承诺卡 A（志愿）已在 T4 兑现——回头看，18 岁的选择把你带到了这里。你的专业是 <b>${esc(s.major ? s.major.name : '（旧存档，未记录）')}</b>${s.major && s.major.tier ? `（${esc(s.major.tier)}）` : ''}，专业系数 k = ${s.flags.majorK}，起点已定。同时签下承诺卡 B：第一份工作，锁定城市 × 行业，后续 80% 的机会只从这条线长出来。</p>
     <div class="card"><p><b>offer 档位（内部公式）：</b>档位 = floor((专业×0.5 + 表达×0.3 + 人脉×0.2) / 100 × 4) + 1。你当前是 <b>${offerTier(s)} 档</b>（1 小公司 / 2 普通 / 3 好公司 / 4 大厂）。</p></div>
     <div class="options">${T5_JOBS.map((j) => `<button class="opt" data-act="t5-pick" data-id="${j.id}"><b>${j.name}</b><span>${j.desc} 钱 +${j.money} 万/年。</span></button>`).join('')}</div>`);
 }
@@ -879,6 +935,16 @@ document.addEventListener('click', (e) => {
     case 't1-major-chip': {
       const inp = $('#t1-major');
       if (inp) inp.value = id;
+      G.t1MajorDraft = id;
+      updateT1MajorLine();
+      break;
+    }
+    case 't1-ad': {
+      const g = G.state.flags.gaokao;
+      if (!g || G.t1AdViewing || g.adsWatched >= AD_BOOST_MAX) break;
+      G.t1AdViewing = true;
+      screenT1();
+      setTimeout(completeAdBoost, AD_VIEW_MS);
       break;
     }
     case 't1-pick': pickT1(id); break;

@@ -289,6 +289,42 @@ function ventureThemes(text, themeKeywords) {
   return tags.slice(0, 3);
 }
 
+// v0.4: Gaokao admission lines. Offsets live in MAJOR_LINE_OFFSETS
+// (data.js); an unlisted major uses the default offset. Lines are game
+// reference lines, not real admission data.
+function majorAdmissionLine(name, line1) {
+  const off = (MAJOR_LINE_OFFSETS && Object.prototype.hasOwnProperty.call(MAJOR_LINE_OFFSETS, name))
+    ? MAJOR_LINE_OFFSETS[name] : MAJOR_LINE_DEFAULT_OFFSET;
+  return line1 + off;
+}
+
+function bestReachableMajor(score, line1) {
+  let best = null, bestOff = -1;
+  for (const [name, off] of Object.entries(MAJOR_LINE_OFFSETS || {})) {
+    if (line1 + off <= score && off > bestOff) { best = name; bestOff = off; }
+  }
+  return best || '艺术设计';
+}
+
+// v0.4: resolve the T1 admission outcome from the sealed Gaokao score.
+// Returns { major, tier, k, note }. tier: '本科' | '本科（调剂）' | '专科'.
+// Below 一段线 -> 专科, k = 0.8 (the design's 0.8 slot). Below the chosen
+// major's line but above 一段线 -> 调剂 to the best reachable major, k = 1.0.
+function resolveAdmission(state, intendedMajor, stanceK) {
+  const g = state.flags.gaokao || {};
+  const eff = (g.base || 0) + (g.bonus || 0);
+  const line1 = g.line1 || 442;
+  const line = majorAdmissionLine(intendedMajor, line1);
+  if (eff < line1) {
+    return { major: intendedMajor, tier: '专科', k: 0.8, note: `总分 ${eff}，未过一段线 ${line1}：本科批次无缘，走专科批次。专业系数 k = 0.8。` };
+  }
+  if (eff < line) {
+    const fb = bestReachableMajor(eff, line1);
+    return { major: fb, tier: '本科（调剂）', k: 1.0, note: `总分 ${eff}，第一志愿参考线 ${line}，差 ${line - eff} 分：调剂到 ${fb}。专业系数 k = 1.0（坚持的加成没了）。` };
+  }
+  return { major: intendedMajor, tier: '本科', k: stanceK, note: '' };
+}
+
 const REWARD_NAMES = { money: '钱', skill: '专业', express: '表达', network: '人脉', influence: '影响力', health: '健康' };
 function rewardText(reward) {
   return Object.entries(reward || {})
@@ -372,5 +408,5 @@ function resolveVentureYear(state, rng, venture, archetype, advanced) {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { SAVE_KEY, META_KEY, blankAttrs, newRun, saveGame, loadGame, clearSave, exportCode, importCode, loadMeta, saveMeta, pressureTier, settleYear, sealDie, offerTier, layoffChance, gambleChance, tierLabel, classifyVenture, startVenture, ventureChance, ventureThemes, resolveVentureYear, rewardText };
+  module.exports = { SAVE_KEY, META_KEY, blankAttrs, newRun, saveGame, loadGame, clearSave, exportCode, importCode, loadMeta, saveMeta, pressureTier, settleYear, sealDie, offerTier, layoffChance, gambleChance, tierLabel, classifyVenture, startVenture, ventureChance, ventureThemes, resolveVentureYear, rewardText, majorAdmissionLine, bestReachableMajor, resolveAdmission };
 }
