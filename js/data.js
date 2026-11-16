@@ -343,8 +343,33 @@ const GAOKAO_REGIONS = {
     id: 'shandong', name: '山东', year: 2026,
     model: '3+3', total: 750,
     line1: 442, specialLine: 525, line2: 150,
-    batchChoices: 96,
+    batchName: '常规批', batchChoices: 96, batchUnit: '“专业+学校”平行志愿',
     note: '普通类分提前批+常规批；2026年起取消特殊类型批；常规批3次填报，每次最多96个“专业+学校”平行志愿；一段线按本科计划1:1.2划定。',
+  },
+  // Northeast (v0.5). All three run 3+1+2, so the game uses the 物理类
+  // lines (历史类 lines are in each note; subject-track choice is not
+  // modelled yet). Batch counts verified 2026-11-16 from the 2026
+  // provincial admission rules.
+  liaoning: {
+    id: 'liaoning', name: '辽宁', year: 2026,
+    model: '3+1+2', total: 750, track: '物理类',
+    line1: 344, specialLine: 508, line2: 150,
+    batchName: '本科批', batchChoices: 112, batchUnit: '“专业+学校”平行志愿',
+    note: '普通类分本科提前批、本科批、高职（专科）提前批、高职（专科）批；按物理类线（历史类本科 442、特殊类型 527）；本科批 112 个“专业+学校”平行志愿。',
+  },
+  jilin: {
+    id: 'jilin', name: '吉林', year: 2026,
+    model: '3+1+2', total: 750, track: '物理类',
+    line1: 321, specialLine: 473, line2: 160,
+    batchName: '本科批', batchChoices: 50, batchUnit: '院校专业组平行志愿',
+    note: '普通类分提前批、本科批、专科批；按物理类线（历史类本科 343、特殊类型 478）；本科批 50 个院校专业组平行志愿。',
+  },
+  heilongjiang: {
+    id: 'heilongjiang', name: '黑龙江', year: 2026,
+    model: '3+1+2', total: 750, track: '物理类',
+    line1: 340, specialLine: 464, line2: 150,
+    batchName: '本科批', batchChoices: 45, batchUnit: '院校专业组平行志愿',
+    note: '普通类分本科提前批、本科批、高职（专科）提前批、高职（专科）批；按物理类线（历史类本科 385、特殊类型 466）；本科批 45 个院校专业组平行志愿。',
   },
 };
 const GAOKAO_DEFAULT_REGION = 'shandong';

@@ -315,19 +315,36 @@ function screenTransition() {
 }
 
 // ---------- T1: 高考报名 ----------
+// v0.5: region picker, shown once when the run has no Gaokao record.
+// The score is rolled here, region-relative (line1 −20 to line1 +220),
+// so the distribution stays meaningful in every region.
+function screenT1Region() {
+  const regions = Object.values(GAOKAO_REGIONS);
+  setScreen(`
+    <h1>T1 · 18 岁 · 高考志愿填报</h1>
+    <p class="intro">先定一件事：你在哪里参加高考？分数和分数线都按这个省的现行政策走。</p>
+    <div class="options">${regions.map((r) => `<button class="opt" data-act="t1-region-pick" data-id="${r.id}"><b>${r.name} ${r.year}</b><span>${r.model}${r.track ? ' · ' + r.track + '线' : ''} · 总分 ${r.total} · 一段线/本科线 ${r.line1} · 特殊类型线 ${r.specialLine} · ${r.batchName}最多 ${r.batchChoices} 个${r.batchUnit}</span></button>`).join('')}</div>
+    <p class="muted">先做山东、辽宁、吉林、黑龙江四个省，其他省以后加。选定后不能改，分数当场掷出并封存。</p>`);
+}
+
+function pickT1Region(regionId) {
+  const s = G.state;
+  if (s.flags.gaokao) { screenT1(); return; }
+  const region = GAOKAO_REGIONS[regionId] || GAOKAO_REGIONS[GAOKAO_DEFAULT_REGION];
+  s.flags.gaokao = { region: region.id, base: region.line1 + G.rng.int(-20, 220), bonus: 0, adsWatched: 0, line1: region.line1, specialLine: region.specialLine };
+  s.rngState = G.rng.getState();
+  autosave('选定高考地区，高考出分');
+  screenT1();
+}
+
 function screenT1() {
   const s = G.state;
   s.turn = 1; s.ap = 3;
+  // v0.5: no Gaokao record yet -> pick a region first; the score is
+  // rolled when the region is picked (region-relative, see pickT1Region).
+  if (!s.flags.gaokao) { screenT1Region(); return; }
   const h0 = s.sealed.H0;
   const tampered = h0 && h0.value >= 60;
-  // v0.4: the Gaokao score is a sealed die, rolled once on first entry
-  // (420–660) and stored on flags — revisits never re-roll it.
-  if (!s.flags.gaokao) {
-    const region = GAOKAO_REGIONS[GAOKAO_DEFAULT_REGION];
-    s.flags.gaokao = { region: region.id, base: G.rng.int(420, 660), bonus: 0, adsWatched: 0, line1: region.line1, specialLine: region.specialLine };
-    s.rngState = G.rng.getState();
-    autosave('高考出分');
-  }
   const g = s.flags.gaokao;
   const region = GAOKAO_REGIONS[g.region] || GAOKAO_REGIONS[GAOKAO_DEFAULT_REGION];
   const eff = g.base + g.bonus;
@@ -336,8 +353,8 @@ function screenT1() {
     <h1>T1 · 18 岁 · 高考志愿填报</h1>
     <p class="intro">选专业时，有的父母会阻止你报想报的专业，有的不会——从这里开始，你自己做决定。</p>
     <div class="card">
-      <p><b>高考总分：${eff}</b>（原始分 ${g.base} + 广告提分 ${g.bonus}）· ${region.name} ${region.year} · ${region.model} · 总分 ${region.total}</p>
-      <p>一段线 ${region.line1} · 特殊类型线 ${region.specialLine} · 二段线 ${region.line2} · 常规批每次最多 ${region.batchChoices} 个“专业+学校”平行志愿。${scoreLine}</p>
+      <p><b>高考总分：${eff}</b>（原始分 ${g.base} + 广告提分 ${g.bonus}）· ${region.name} ${region.year} · ${region.model}${region.track ? ' · ' + region.track + '线' : ''} · 总分 ${region.total}</p>
+      <p>一段线 ${region.line1} · 特殊类型线 ${region.specialLine} · 二段线 ${region.line2} · ${region.batchName}每次最多 ${region.batchChoices} 个${region.batchUnit}。${scoreLine}</p>
       <p class="muted">${esc(region.note)}</p>
       ${G.t1AdViewing
         ? '<p class="muted">广告播放中（演示版 5 秒），看完 +10 分…</p>'
@@ -932,6 +949,7 @@ document.addEventListener('click', (e) => {
       autosave('就这样，已记录');
       screenTransition();
       break;
+    case 't1-region-pick': pickT1Region(id); break;
     case 't1-major-chip': {
       const inp = $('#t1-major');
       if (inp) inp.value = id;
