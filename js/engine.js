@@ -216,6 +216,24 @@ function tierLabel(pct) {
 // Classification is keyword-based (the design doc's intent-classification
 // fallback): the player's own words pick the archetype; unmatched input
 // falls through to the generic archetype, never to a dead end.
+// v0.7.1: that fall-through was the bug behind "和父母要钱买上海的房子"
+// becoming a 创业项目： the input hits zero venture keywords, so it landed
+// on generic with milestones ("做出最小版本 / 找到第一批用户 / 收支打平")
+// and yearly income that make no sense for it. A venture needs a product,
+// a paying customer and a price; asking family for money to buy a house
+// has none of the three. nonVentureReason() (below) catches those inputs
+// BEFORE classifyVenture runs; the caller shows a "not a venture" panel
+// instead of the archetype picker. A venture keyword always wins over a
+// non-venture pattern, so "借钱开奶茶店" still classifies as a venture.
+function ventureKeywordScore(text, archetypes) {
+  const t = String(text || '').toLowerCase();
+  let total = 0;
+  for (const a of (archetypes || [])) {
+    for (const k of (a.keys || [])) if (k && t.includes(k.toLowerCase())) total += 1;
+  }
+  return total;
+}
+
 function classifyVenture(text, archetypes) {
   const t = String(text || '').toLowerCase();
   let best = null, bestScore = 0;
@@ -225,6 +243,35 @@ function classifyVenture(text, archetypes) {
     if (score > bestScore) { bestScore = score; best = a; }
   }
   return best || archetypes.find((a) => a.id === 'generic') || archetypes[0];
+}
+
+// v0.7.1: non-venture guard. Returns { kind, reason } when the input is
+// not a business idea at all, null otherwise. Checked BEFORE
+// classifyVenture, and only when no venture keyword hits — so a real
+// venture that happens to mention money ("借钱开奶茶店", "攒钱开店") is
+// never blocked by this. Kinds: ask-family (向家里要钱买东西）,
+// saving （攒钱买房买车）, purchase （买房买车自用）, career （找工作/考公/考研）.
+const BUSINESS_VERBS = /开|做|卖|创业|搞|当|办|出租|收租|投资|经营|代理|中介|跑/;
+const NON_VENTURE_PATTERNS = [
+  { kind: 'ask-family',
+    test: (t) => /(要钱|借钱|伸手|啃老|管.{0,4}要|找家里|问家里)/.test(t)
+      && /(买房|房子|买车|车子|首付|彩礼|装修|学费|留学|旅游|结婚|买)/.test(t),
+    reason: '向家里要钱买东西，是家庭决策，不是能经营的项目：没有卖的东西，也没有付钱的客户。' },
+  { kind: 'saving',
+    test: (t) => /(攒钱|存钱)/.test(t) && /(买房|房子|买车|车子|首付|彩礼)/.test(t),
+    reason: '攒钱买房买车是存钱、花钱，不是赚钱：没有产品、没有客户，启动费和每年收入都无从谈起。' },
+  { kind: 'purchase',
+    test: (t) => /(买房|买房子|买车|买辆车|付首付|交首付)/.test(t) && !BUSINESS_VERBS.test(t),
+    reason: '买房买车是花钱，不是赚钱：没有卖的东西、没有付钱的客户，启动费和每年收入都无从谈起。' },
+  { kind: 'career',
+    test: (t) => /(找工作|找份工作|考公|考公务员|考编|考研)/.test(t),
+    reason: '找工作、考公、考研是职业和人生选择，不是创业线：收入来自一份工作或一张录取通知，不是一条能一年一年推进的项目。' },
+];
+function nonVentureReason(text, archetypes) {
+  const t = String(text || '').toLowerCase();
+  if (ventureKeywordScore(t, archetypes || []) > 0) return null;
+  for (const p of NON_VENTURE_PATTERNS) if (p.test(t)) return { kind: p.kind, reason: p.reason };
+  return null;
 }
 
 // v0.2: max 2 live lines at once (active + validating). `opts.validateOnly`
@@ -411,5 +458,5 @@ function resolveVentureYear(state, rng, venture, archetype, advanced) {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { SAVE_KEY, META_KEY, blankAttrs, newRun, saveGame, loadGame, clearSave, exportCode, importCode, loadMeta, saveMeta, pressureTier, settleYear, sealDie, offerTier, layoffChance, gambleChance, tierLabel, classifyVenture, startVenture, ventureChance, ventureThemes, resolveVentureYear, rewardText, majorAdmissionLine, bestReachableMajor, resolveAdmission };
+  module.exports = { SAVE_KEY, META_KEY, blankAttrs, newRun, saveGame, loadGame, clearSave, exportCode, importCode, loadMeta, saveMeta, pressureTier, settleYear, sealDie, offerTier, layoffChance, gambleChance, tierLabel, classifyVenture, nonVentureReason, startVenture, ventureChance, ventureThemes, resolveVentureYear, rewardText, majorAdmissionLine, bestReachableMajor, resolveAdmission };
 }

@@ -1142,16 +1142,22 @@ function doImport() {
 
 // v0.3: idea confirm screen. G.pendingIdea = { text, archId, themes,
 //   explanation, aiReviewing, aiVerdict: null | {reasonable, archetypeId,
-//   cost, reason}, aiError: '' }.
+//   cost, reason}, aiError: '', nonVenture: '' | kind, nonVentureReason: '' }.
 // AI review is opt-in: only when the player taps 请 AI 审核 is the idea
 // (plus their explanation) sent to a free keyless AI endpoint; the verdict
 // is the FINAL result — it sets the archetype and startup cost. If the
 // verdict says the idea does not hold up, direct start is closed and the
 // player either revises or validates for free. If the AI cannot be reached,
 // the keyword result stands and the screen says so.
+// v0.7.1: non-venture inputs (engine.js nonVentureReason — e.g. asking
+// family for money to buy a house) never reach this archetype panel: they
+// get the "这不是一条创业线" panel instead (renderNonVentureConfirm),
+// with no direct start and no validation — only AI appeal, note, or back.
+// A reasonable AI verdict re-opens the normal panel below.
 function renderIdeaConfirm() {
   const p = G.pendingIdea;
   if (!p) return;
+  if (p.nonVenture && !(p.aiVerdict && p.aiVerdict.reasonable)) { renderNonVentureConfirm(p); return; }
   const arch = VENTURE_ARCHETYPES.find((x) => x.id === p.archId) || VENTURE_ARCHETYPES[0];
   const archOptions = VENTURE_ARCHETYPES.map((a) => `<option value="${a.id}" ${a.id === arch.id ? 'selected' : ''}>${esc(a.name)}（启动 ${a.cost} 万）</option>`).join('');
   const v = p.aiVerdict;
@@ -1196,6 +1202,39 @@ function renderIdeaConfirm() {
   const selEl = $('#idea-arch');
   if (selEl) selEl.addEventListener('change', updateDetail);
   updateDetail();
+}
+
+// v0.7.1: the "not a venture" panel. Reached when engine.js
+// nonVentureReason flags the input and no reasonable AI verdict has
+// overridden it. No archetype dropdown, no direct start, no free
+// validation — those make no sense for a non-business idea. The player can
+// appeal to the AI (its reasonable=true verdict re-opens the normal panel),
+// note the idea down, or go back and rewrite it.
+function renderNonVentureConfirm(p) {
+  const v = p.aiVerdict;
+  let verdictHtml = '';
+  if (p.aiReviewing) {
+    verdictHtml = '<p class="muted">AI 审核中，请稍等…</p>';
+  } else if (v && !v.reasonable) {
+    verdictHtml = `<p class="ai-verdict no">AI 也这么看：${esc(v.reason)}</p>`;
+  } else if (p.aiError) {
+    verdictHtml = `<p class="muted">AI 没连上（${esc(p.aiError)}），先按本地判断。</p>`;
+  }
+  setScreen(`
+    <h1>这不是一条创业线</h1>
+    <div class="card big">
+      <p>你的原话：“${esc(p.text)}”</p>
+      <p>系统判断：<b>这不是创业点子</b> —— ${esc(p.nonVentureReason || '')}</p>
+      <p>创业线要说清三件事：卖什么、卖给谁、怎么收费。直接开线的话，里程碑和每年收入都对不上号。</p>
+      ${verdictHtml}
+      <p>不服这个判断？写一句补充（可选）：<br><textarea id="idea-why" rows="2" placeholder="比如：我打算把房子租出去收租。">${esc(p.explanation || '')}</textarea></p>
+      <p class="muted">点“请 AI 审核”会把点子和补充说明发给一个免费 AI 接口（不用登录、不用付费），由它定这到底是不是一条能开的线；AI 说能开，就按它的分法开线。</p>
+    </div>
+    <div class="actions">
+      <button data-act="idea-ai-review">请 AI 审核</button>
+      <button data-act="idea-note">先记下来</button>
+      <button data-act="idea-back">返回改想法</button>
+    </div>`);
 }
 
 document.addEventListener('click', (e) => {
@@ -1279,8 +1318,11 @@ document.addEventListener('click', (e) => {
       const text = ($('#idea-text').value || '').trim();
       if (text.length < 2) { alert('先写一句你的点子。'); break; }
       const arch = classifyVenture(text, VENTURE_ARCHETYPES);
+      // v0.7.1: non-venture inputs are flagged first — they get the
+      // "这不是一条创业线" panel, never the archetype picker.
+      const nv = nonVentureReason(text, VENTURE_ARCHETYPES);
       const themes = ventureThemes(text, THEME_KEYWORDS);
-      G.pendingIdea = { text, archId: arch.id, themes, explanation: '', aiReviewing: false, aiVerdict: null, aiError: '' };
+      G.pendingIdea = { text, archId: arch.id, themes, explanation: '', aiReviewing: false, aiVerdict: null, aiError: '', nonVenture: nv ? nv.kind : '', nonVentureReason: nv ? nv.reason : '' };
       renderIdeaConfirm();
       break;
     }
@@ -1298,7 +1340,7 @@ document.addEventListener('click', (e) => {
         if (res.ok) {
           G.pendingIdea.aiVerdict = res.verdict;
           G.pendingIdea.aiError = '';
-          if (res.verdict.reasonable) G.pendingIdea.archId = res.verdict.archetypeId;
+          if (res.verdict.reasonable && res.verdict.archetypeId) G.pendingIdea.archId = res.verdict.archetypeId;
         } else {
           G.pendingIdea.aiVerdict = null;
           G.pendingIdea.aiError = res.error;
@@ -1308,8 +1350,17 @@ document.addEventListener('click', (e) => {
       break;
     }
     case 'idea-confirm': {
+      // v0.7.1: defense in depth — the non-venture panel renders no
+      // confirm button, but a stale click must never start such a line.
+      const p0 = G.pendingIdea;
+      if (p0 && p0.nonVenture && !(p0.aiVerdict && p0.aiVerdict.reasonable)) { alert('系统判断这不是一条创业线：先改想法，或者请 AI 审核。'); break; }
       const sel = $('#idea-arch');
-      const arch = VENTURE_ARCHETYPES.find((x) => x.id === (sel ? sel.value : (G.pendingIdea && G.pendingIdea.archId))) || VENTURE_ARCHETYPES[0];
+      // v0.7.1: an empty select value must fall back to the pending idea's
+      // archetype, not to archetypes[0] — the old `sel ? sel.value : ...`
+      // form silently switched the line to ai-tool whenever the select
+      // held no value (caught by test-v10 NONVENTURE-28).
+      const selVal = sel && sel.value;
+      const arch = VENTURE_ARCHETYPES.find((x) => x.id === (selVal || (G.pendingIdea && G.pendingIdea.archId))) || VENTURE_ARCHETYPES[0];
       const text = (G.pendingIdea && G.pendingIdea.text) || '';
       const v = G.pendingIdea && G.pendingIdea.aiVerdict;
       const opts = {};
@@ -1338,8 +1389,13 @@ document.addEventListener('click', (e) => {
       break;
     }
     case 'idea-validate': {
+      // v0.7.1: same guard as idea-confirm — validating a non-venture
+      // makes no sense either (there is nothing to validate for free).
+      const p0v = G.pendingIdea;
+      if (p0v && p0v.nonVenture && !(p0v.aiVerdict && p0v.aiVerdict.reasonable)) { alert('系统判断这不是一条创业线：先改想法，或者请 AI 审核。'); break; }
       const sel = $('#idea-arch');
-      const arch = VENTURE_ARCHETYPES.find((x) => x.id === (sel ? sel.value : (G.pendingIdea && G.pendingIdea.archId))) || VENTURE_ARCHETYPES[0];
+      const selVal = sel && sel.value;
+      const arch = VENTURE_ARCHETYPES.find((x) => x.id === (selVal || (G.pendingIdea && G.pendingIdea.archId))) || VENTURE_ARCHETYPES[0];
       const text = (G.pendingIdea && G.pendingIdea.text) || '';
       const v = G.pendingIdea && G.pendingIdea.aiVerdict;
       const opts = { validateOnly: true };

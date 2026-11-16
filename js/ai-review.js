@@ -13,6 +13,13 @@
  * call fails, times out, or the endpoint drops the connection (it does so
  * occasionally — verified 2026-11-16), the game falls back to the keyword
  * result and says so. The game stays playable offline.
+ *
+ * v0.7.1: the verdict can now say the idea is not a venture at all
+ * (archetype "none", only with reasonable=false) — e.g. asking family for
+ * money to buy a house. The keyword classifier has no "not a venture"
+ * answer (it falls through to generic), so the local non-venture guard in
+ * engine.js catches those first; the AI is the player's appeal route, and
+ * its reasonable=true verdict re-opens the normal archetype panel.
  */
 const AI_REVIEW_ENDPOINT = 'https://text.pollinations.ai/';
 const AI_REVIEW_TIMEOUT_MS = 60000;
@@ -27,8 +34,9 @@ function buildVentureReviewPrompt(text, explanation, guessName) {
     lines.push('玩家补充说明（他认为这个点子合理的原因）：' + String(explanation).trim().slice(0, 150));
   }
   lines.push('关键词分类初步判断为：' + (guessName || '未知') + '。请你独立审核，不要只顺着初步判断。');
-  lines.push('只返回 JSON，不要其他文字：{"reasonable": true/false, "archetype": "ai-tool/content/opensrc/ecommerce/service/knowledge/local/generic 其中一个", "cost": 启动成本（万元，0到15的数字）, "reason": "一句话理由，不超过60字"}');
+  lines.push('只返回 JSON，不要其他文字：{"reasonable": true/false, "archetype": "ai-tool/content/opensrc/ecommerce/service/knowledge/local/generic/none 其中一个（根本不是创业点子时写 none）", "cost": 启动成本（万元，0到15的数字）, "reason": "一句话理由，不超过60字"}');
   lines.push('判断标准：点子是否说得清卖什么、卖给谁、怎么收费；启动成本是否符合该类型（轻资产 0–3 万，实体 1–15 万）；明显空想、违法或完全没商业逻辑的判 reasonable=false。');
+  lines.push('如果这根本不是一个创业点子（比如向家里要钱买房、买车，找工作，考公务员），直接判 reasonable=false，archetype 写 none，并一句话说清为什么它不是创业线。');
   return lines.join('\n');
 }
 
@@ -40,8 +48,18 @@ function parseVentureVerdict(raw, archetypes, fallback) {
     if (start < 0 || end <= start) return { ok: false, error: 'AI 没有返回可读的结论。' };
     const obj = JSON.parse(s.slice(start, end + 1));
     const ids = (archetypes || []).map((a) => a.id);
-    const archetypeId = ids.includes(obj.archetype) ? obj.archetype : (fallback && fallback.id);
-    if (!archetypeId) return { ok: false, error: 'AI 返回的类型不在可选范围内。' };
+    // v0.7.1: "none" is a legal answer only with reasonable=false — the AI
+    // saying the idea is not a venture at all. A reasonable=true verdict
+    // must name a real line, so "none" there falls back to the guess.
+    let archetypeId = null;
+    if (obj.archetype === 'none') {
+      archetypeId = (obj.reasonable === true) ? (fallback && fallback.id) : null;
+    } else if (ids.includes(obj.archetype)) {
+      archetypeId = obj.archetype;
+    } else {
+      archetypeId = fallback && fallback.id;
+    }
+    if (!archetypeId && obj.reasonable === true) return { ok: false, error: 'AI 返回的类型不在可选范围内。' };
     let cost = Number(obj.cost);
     if (!isFinite(cost)) cost = (archetypes.find((a) => a.id === archetypeId) || {}).cost ?? 2;
     cost = Math.max(0, Math.min(AI_REVIEW_MAX_COST, Math.round(cost * 10) / 10));
