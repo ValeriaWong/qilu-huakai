@@ -328,33 +328,52 @@ function screenT1() {
       <p><b>征兆：</b>${h0 ? h0.omens.map((o) => esc(o.text)).join(' ') : ''}</p>
       ${tampered ? `<p class="warn">这颗骰在你出生那年掷出：父母干预强度 ${h0.value}。第一志愿已经被改成了省内师范。</p>` : `<p>父母干预强度 ${h0 ? h0.value : '?'}，这一次，他们让你自己填。</p>`}
     </div>
+    <h2>你想报的专业</h2>
+    <div class="card">
+      <p><input id="t1-major" type="text" placeholder="输入你想报的专业，比如：计算机、临床医学、会计……" maxlength="20"></p>
+      <p class="muted">点一个填进去，也可以自己写：</p>
+      <div class="options">${T1_MAJORS.map((m) => `<button class="opt" data-act="t1-major-chip" data-id="${esc(m)}">${esc(m)}</button>`).join('')}</div>
+    </div>
     <h2>你的第一志愿</h2>
     <div class="options">
-      <button class="opt" data-act="t1-pick" data-id="obey"><b>听父母的</b><span>家庭线 +1，自主执念进度 −1。专业系数 k = 1.0。</span></button>
-      <button class="opt" data-act="t1-pick" data-id="insist"><b>坚持自己</b><span>家庭线 −1。专业系数 k = 1.3；家庭经济 ≤2 档时需自挣学费（T2–T5 每年 −1 AP）。</span></button>
-      <button class="opt" data-act="t1-pick" data-id="negotiate"><b>谈判，折中</b><span>家庭线不变。专业系数 k = 1.0，留一个以后再谈的口子。</span></button>
+      <button class="opt" data-act="t1-pick" data-id="obey"><b>听父母的</b><span>${tampered ? '第一志愿已经是省内师范。' : '按父母的意思，报省内师范。'}家庭线 +1，自主执念进度 −1。专业系数 k = 1.0。</span></button>
+      <button class="opt" data-act="t1-pick" data-id="insist"><b>坚持自己</b><span>就报你上面写的专业。家庭线 −1。专业系数 k = 1.3；家庭经济 ≤2 档时需自挣学费（T2–T5 每年 −1 AP）。</span></button>
+      <button class="opt" data-act="t1-pick" data-id="negotiate"><b>谈判，折中</b><span>还是报你写的专业，但 k = 1.0，留一个以后再谈的口子。</span></button>
     </div>
     <p class="muted">承诺卡 A（志愿，T2–T4 兑现，T5 回顾）：专业锁定 8 年，决定专业成长系数 k。</p>`);
 }
 
 function pickT1(choice) {
   const s = G.state, a = s.attrs;
+  const wanted = ($('#t1-major') ? $('#t1-major').value : '').trim().slice(0, 20);
   const k = { obey: 1.0, insist: 1.3, negotiate: 1.0 }[choice];
+  const stance = { obey: '听父母的', insist: '坚持自己', negotiate: '谈判折中' }[choice];
+  let major, source;
+  if (choice === 'obey') {
+    major = '省内师范';
+    source = 'parents';
+  } else {
+    if (!wanted) { alert('先写你想报的专业，再选这个。'); return; }
+    major = wanted;
+    source = 'self';
+  }
   if (choice === 'obey') { a.family += 1; s.flags.obsessionProgress = (s.flags.obsessionProgress || 0) - 1; }
   if (choice === 'insist') {
     a.family -= 1;
     if (s.origin.attrs.money <= 2) { s.flags.selfFunded = true; }
   }
+  s.major = { name: major, source };
   s.flags.majorK = k;
   s.commitments.A = {
-    text: '志愿：' + { obey: '听父母的', insist: '坚持自己', negotiate: '谈判折中' }[choice],
+    text: '志愿：' + major + '（' + stance + '）',
     signedAt: 'T1', dueTurn: 4,
-    snapshot: { skill: a.skill, express: a.express, network: a.network, family: a.family, k },
+    snapshot: { skill: a.skill, express: a.express, network: a.network, family: a.family, k, major },
   };
   autosave('承诺 A 已签署并封存');
   setScreen(`
     <h1>承诺卡 A 已签署</h1>
-    <div class="card"><p>专业系数 k = ${k}，T2–T4 兑现，T5 回顾。骰子已封存，兑现时只读档、不重掷。</p>
+    <div class="card"><p>你的专业：<b>${esc(major)}</b>（${stance}）。专业系数 k = ${k}，T2–T4 兑现，T5 回顾。骰子已封存，兑现时只读档、不重掷。</p>
+    ${s.flags.selfFunded ? '<p>家庭经济 ≤2 档：自挣学费，T2–T5 每年 −1 AP。</p>' : ''}
     <p class="muted">征兆已记下，兑现那天会拿出来对照：你当时收到过什么信号、忽略了什么。</p></div>
     <div class="actions"><button class="primary" data-act="year-start">进入 T2 · 19 岁</button></div>`);
 }
@@ -550,7 +569,7 @@ function screenT5() {
   const s = G.state;
   setScreen(`
     <h1>T5 · 22 岁 · 毕业去向</h1>
-    <p class="intro">承诺卡 A（志愿）已在 T4 兑现——回头看，18 岁的选择把你带到了这里。专业系数 k = ${s.flags.majorK}，起点已定。同时签下承诺卡 B：第一份工作，锁定城市 × 行业，后续 80% 的机会只从这条线长出来。</p>
+    <p class="intro">承诺卡 A（志愿）已在 T4 兑现——回头看，18 岁的选择把你带到了这里。你的专业是 <b>${esc(s.major ? s.major.name : '（旧存档，未记录）')}</b>，专业系数 k = ${s.flags.majorK}，起点已定。同时签下承诺卡 B：第一份工作，锁定城市 × 行业，后续 80% 的机会只从这条线长出来。</p>
     <div class="card"><p><b>offer 档位（内部公式）：</b>档位 = floor((专业×0.5 + 表达×0.3 + 人脉×0.2) / 100 × 4) + 1。你当前是 <b>${offerTier(s)} 档</b>（1 小公司 / 2 普通 / 3 好公司 / 4 大厂）。</p></div>
     <div class="options">${T5_JOBS.map((j) => `<button class="opt" data-act="t5-pick" data-id="${j.id}"><b>${j.name}</b><span>${j.desc} 钱 +${j.money} 万/年。</span></button>`).join('')}</div>`);
 }
@@ -609,8 +628,9 @@ function enterSlice(direct) {
     s.attrs.money = 12 + rng.int(0, 18);
     s.attrs.stress = 35 + rng.int(0, 15);
     s.flags.majorK = 1.0;
+    s.major = { name: '省内师范', source: 'parents' };
     s.flags.familySafety = s.origin.attrs.money >= 2 ? '家里能接住你一次，但只有一次。' : '家里接不住你——这条路得你自己走。';
-    s.commitments.A = { text: '志愿：听父母的', signedAt: 'T1', dueTurn: 4, snapshot: {} };
+    s.commitments.A = { text: '志愿：省内师范（听父母的）', signedAt: 'T1', dueTurn: 4, snapshot: {} };
     s.commitments.B = { text: '第一份工作：普通公司', signedAt: 'T5', dueTurn: 6, snapshot: {} };
     s.flags.employment = 'employed';
     s.flags.housing = 'rent';
@@ -856,6 +876,11 @@ document.addEventListener('click', (e) => {
       autosave('就这样，已记录');
       screenTransition();
       break;
+    case 't1-major-chip': {
+      const inp = $('#t1-major');
+      if (inp) inp.value = id;
+      break;
+    }
     case 't1-pick': pickT1(id); break;
     case 'year-start': startYear(2); break;
     case 'year-next': startYear(Number(id)); break;

@@ -330,7 +330,11 @@ const THEME_KEYWORDS = [
   { keys: ['音乐', '唱歌'], tag: '音乐' },
 ];
 
-// T5 毕业去向 (承诺 B). offer tier formula in engine.js.
+// T1 major quick picks (tap to fill the input; the player may also type
+// any major). The only major word the game showed before v0.3.1 was 会计,
+// and only as a childhood omen line ("你妈说隔壁家孩子学了会计") —
+// there were no major options at all.
+const T1_MAJORS = ['计算机', '临床医学', '法学', '金融', '会计', '新闻传播', '土木', '英语', '艺术设计', '师范'];
 const T5_JOBS = [
   { id: 'bigtech', name: '大厂', desc: '钱高，压力 +8/年。', money: 18, stress: 8 },
   { id: 'stable',  name: '体制内', desc: '稳，但影响力上限 40。', money: 9, stress: 2 },
@@ -381,5 +385,5 @@ const T9_SLICE = {
 };
 
 if (typeof module !== 'undefined') {
-  module.exports = { DIFFICULTIES, OBSESSIONS, FAMILIES, TAG_KEYWORDS, ACTIONS, YEAR_EVENTS, T5_JOBS, T9_SLICE, VENTURE_ARCHETYPES, THEME_KEYWORDS };
+  module.exports = { DIFFICULTIES, OBSESSIONS, FAMILIES, TAG_KEYWORDS, ACTIONS, YEAR_EVENTS, T1_MAJORS, T5_JOBS, T9_SLICE, VENTURE_ARCHETYPES, THEME_KEYWORDS };
 }
