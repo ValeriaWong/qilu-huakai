@@ -312,7 +312,9 @@ function bestReachableMajor(score, line1) {
 // major's line but above 一段线 -> 调剂 to the best reachable major, k = 1.0.
 function resolveAdmission(state, intendedMajor, stanceK) {
   const g = state.flags.gaokao || {};
-  const eff = (g.base || 0) + (g.bonus || 0);
+  // v0.5.1: the sealed score is the base only. Old saves may carry a
+  // bonus from the removed ad boost; it is ignored, never added.
+  const eff = g.base || 0;
   const line1 = g.line1 || 442;
   const line = majorAdmissionLine(intendedMajor, line1);
   if (eff < line1) {

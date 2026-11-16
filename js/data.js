@@ -381,11 +381,10 @@ const MAJOR_LINE_OFFSETS = {
   '新闻传播': 70, '师范': 70, '土木': 50, '英语': 50, '艺术设计': 0,
 };
 const MAJOR_LINE_DEFAULT_OFFSET = 60;
-// Ad boost: +10 per watch, max 3 watches per run (+30 max). Simulated
-// 5s view in the demo (no real ad SDK wired); labelled 演示版 in the UI.
-const AD_BOOST_POINTS = 10;
-const AD_BOOST_MAX = 3;
-const AD_VIEW_MS = 5000;
+// v0.5.1 (Allen 2026-11-17): the ad boost is gone. Two experts agreed it
+// fought the sealed die, and Allen decided to convert it into 志愿诊断 —
+// information only, never a score change. No ad constants remain; the
+// score rolled at region pick is final (see game.js t1DiagnosisHtml).
 
 // T1 major quick picks (tap to fill the input; the player may also type
 // any major). The only major word the game showed before v0.3.1 was 会计,
@@ -442,5 +441,5 @@ const T9_SLICE = {
 };
 
 if (typeof module !== 'undefined') {
-  module.exports = { DIFFICULTIES, OBSESSIONS, FAMILIES, TAG_KEYWORDS, ACTIONS, YEAR_EVENTS, T1_MAJORS, GAOKAO_REGIONS, GAOKAO_DEFAULT_REGION, MAJOR_LINE_OFFSETS, MAJOR_LINE_DEFAULT_OFFSET, AD_BOOST_POINTS, AD_BOOST_MAX, AD_VIEW_MS, T5_JOBS, T9_SLICE, VENTURE_ARCHETYPES, THEME_KEYWORDS };
+  module.exports = { DIFFICULTIES, OBSESSIONS, FAMILIES, TAG_KEYWORDS, ACTIONS, YEAR_EVENTS, T1_MAJORS, GAOKAO_REGIONS, GAOKAO_DEFAULT_REGION, MAJOR_LINE_OFFSETS, MAJOR_LINE_DEFAULT_OFFSET, T5_JOBS, T9_SLICE, VENTURE_ARCHETYPES, THEME_KEYWORDS };
 }

@@ -331,7 +331,8 @@ function pickT1Region(regionId) {
   const s = G.state;
   if (s.flags.gaokao) { screenT1(); return; }
   const region = GAOKAO_REGIONS[regionId] || GAOKAO_REGIONS[GAOKAO_DEFAULT_REGION];
-  s.flags.gaokao = { region: region.id, base: region.line1 + G.rng.int(-20, 220), bonus: 0, adsWatched: 0, line1: region.line1, specialLine: region.specialLine };
+  // v0.5.1: no bonus/adsWatched anymore — the score is sealed here, final.
+  s.flags.gaokao = { region: region.id, base: region.line1 + G.rng.int(-20, 220), line1: region.line1, specialLine: region.specialLine };
   s.rngState = G.rng.getState();
   autosave('选定高考地区，高考出分');
   screenT1();
@@ -347,20 +348,21 @@ function screenT1() {
   const tampered = h0 && h0.value >= 60;
   const g = s.flags.gaokao;
   const region = GAOKAO_REGIONS[g.region] || GAOKAO_REGIONS[GAOKAO_DEFAULT_REGION];
-  const eff = g.base + g.bonus;
+  // v0.5.1: effective score is the sealed base only. An old save's bonus
+  // (from the removed ad boost) is ignored; the player is told once.
+  const eff = g.base || 0;
   const scoreLine = eff >= g.specialLine ? '已过特殊类型线。' : eff >= g.line1 ? '已过一段线，未过特殊类型线。' : '未过一段线。';
   setScreen(`
     <h1>T1 · 18 岁 · 高考志愿填报</h1>
     <p class="intro">选专业时，有的父母会阻止你报想报的专业，有的不会——从这里开始，你自己做决定。</p>
     <div class="card">
-      <p><b>高考总分：${eff}</b>（原始分 ${g.base} + 广告提分 ${g.bonus}）· ${region.name} ${region.year} · ${region.model}${region.track ? ' · ' + region.track + '线' : ''} · 总分 ${region.total}</p>
+      <p><b>高考总分：${eff}</b>（封存分，选地区时掷出，不可更改）· ${region.name} ${region.year} · ${region.model}${region.track ? ' · ' + region.track + '线' : ''} · 总分 ${region.total}</p>
       <p>一段线 ${region.line1} · 特殊类型线 ${region.specialLine} · 二段线 ${region.line2} · ${region.batchName}每次最多 ${region.batchChoices} 个${region.batchUnit}。${scoreLine}</p>
       <p class="muted">${esc(region.note)}</p>
-      ${G.t1AdViewing
-        ? '<p class="muted">广告播放中（演示版 5 秒），看完 +10 分…</p>'
-        : g.adsWatched < AD_BOOST_MAX
-          ? `<button class="opt" data-act="t1-ad">看广告提分（+${AD_BOOST_POINTS} 分，本局还能看 ${AD_BOOST_MAX - g.adsWatched} 次 · 演示版，未接真实广告）</button>`
-          : '<p class="muted">广告提分已用完（本局最多 3 次，共 +30 分）。</p>'}
+      ${(g.bonus || 0) > 0 ? `<p class="warn">旧存档的广告加分（+${g.bonus}）已按新规则失效，分数恢复为封存原始分 ${g.base}。</p>` : ''}
+      ${G.t1Diagnosing
+        ? `<div class="card">${t1DiagnosisHtml()}<p><button class="opt" data-act="t1-diag-close">收起诊断</button></p></div>`
+        : `<button class="opt" data-act="t1-diagnose">志愿诊断：看看这个分数够得着哪些专业（只给信息，不改分数）</button>`}
     </div>
     <div class="card">
       <p><b>家庭兜底：</b>${esc(s.flags.familySafety || '')}</p>
@@ -396,22 +398,47 @@ function updateT1MajorLine() {
   const name = ($('#t1-major') ? $('#t1-major').value : '').trim();
   if (!name) { el.textContent = '先写专业，再看参考线。'; return; }
   const line = majorAdmissionLine(name, g.line1);
-  const eff = g.base + g.bonus;
-  el.textContent = `${name}参考线 ${line}：你的分数 ${eff}，` + (eff >= line ? '达线。' : `差 ${line - eff} 分——可以看广告提分，或换个分低的专业。`);
+  const eff = g.base || 0;
+  el.textContent = `${name}参考线 ${line}：你的分数 ${eff}，` + (eff >= line ? '达线。' : `差 ${line - eff} 分——点“志愿诊断”，看看够得着哪些专业。`);
 }
 
-// v0.4: the ad finishes (5s simulated view in the demo). Bonus is sealed
-// in state and survives reloads.
-function completeAdBoost() {
+// v0.5.1: 志愿诊断 (replaces the removed ad boost). Information only:
+// the sealed score never changes. Shows where the score stands, which
+// majors are reachable at this score (one tap to switch — the
+// re-evaluation opportunity), and the 调剂 / 专科 paths.
+function t1DiagnosisHtml() {
   const s = G && G.state;
-  if (!s || !s.flags.gaokao) return;
+  if (!s || !s.flags.gaokao) return '';
   const g = s.flags.gaokao;
-  if (g.adsWatched >= AD_BOOST_MAX) { G.t1AdViewing = false; return; }
-  g.bonus += AD_BOOST_POINTS;
-  g.adsWatched += 1;
-  G.t1AdViewing = false;
-  autosave('看广告提分');
-  screenT1();
+  const eff = g.base || 0;
+  const line1 = g.line1 || 442;
+  const inp = (typeof document !== 'undefined') ? document.querySelector('#t1-major') : null;
+  const name = ((inp && inp.value) || G.t1MajorDraft || '').trim();
+  const lines = [`<p><b>志愿诊断</b>（只给信息，不改分数）</p>`,
+    `<p>你的封存分数 ${eff}，一段线 ${line1}，特殊类型线 ${g.specialLine}。诊断不改分数，也不限次数。</p>`];
+  if (name) {
+    const line = majorAdmissionLine(name, line1);
+    lines.push(`<p>「${esc(name)}」参考线 ${line}：` + (eff >= line ? '达线。' : `差 ${line - eff} 分。`) + '</p>');
+  } else {
+    lines.push('<p>先写一个专业，再看它够不够线。</p>');
+  }
+  if (eff < line1) {
+    lines.push(`<p>未过一段线：本科批次无缘，走专科批次（专业系数 k = 0.8）。专科里也可以再选：换一个你更想读的专科方向，分数不变。</p>`);
+  } else {
+    const reachable = T1_MAJORS
+      .map((m) => ({ name: m, line: majorAdmissionLine(m, line1) }))
+      .filter((x) => x.line <= eff)
+      .sort((a, b) => b.line - a.line);
+    if (reachable.length) {
+      lines.push('<p>按这个分数够得着（点一个换专业，分数不变）：</p><div class="options">' +
+        reachable.slice(0, 5).map((x) => `<button class="opt" data-act="t1-diag-major" data-id="${esc(x.name)}">${esc(x.name)}（参考线 ${x.line}）</button>`).join('') + '</div>');
+    }
+    if (name && eff < majorAdmissionLine(name, line1)) {
+      lines.push(`<p>差分也不白给：签“坚持自己”会调剂到够得着的最高专业（${esc(bestReachableMajor(eff, line1))}，k = 1.0）；想换就点上面。</p>`);
+    }
+  }
+  lines.push('<p class="muted">参考线是游戏内的简化线，不是真实投档线。重新评估的是志愿，不是分数。</p>');
+  return lines.join('');
 }
 
 function pickT1(choice) {
@@ -957,12 +984,14 @@ document.addEventListener('click', (e) => {
       updateT1MajorLine();
       break;
     }
-    case 't1-ad': {
-      const g = G.state.flags.gaokao;
-      if (!g || G.t1AdViewing || g.adsWatched >= AD_BOOST_MAX) break;
-      G.t1AdViewing = true;
+    case 't1-diagnose': G.t1Diagnosing = true; screenT1(); break;
+    case 't1-diag-close': G.t1Diagnosing = false; screenT1(); break;
+    case 't1-diag-major': {
+      // Re-evaluation: switch the major, keep the panel open, score untouched.
+      const inp = $('#t1-major');
+      if (inp) inp.value = id;
+      G.t1MajorDraft = id;
       screenT1();
-      setTimeout(completeAdBoost, AD_VIEW_MS);
       break;
     }
     case 't1-pick': pickT1(id); break;
