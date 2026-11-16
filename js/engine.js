@@ -128,7 +128,6 @@ function settleYear(state, diff) {
   const before = { ...a };
   a.stress += 4; // 主线工作基线消耗
   a.stress += diff.recovery; // 年度自然恢复（负数 = 恢复）
-  if (state.flags.restBonus) { a.stress -= 5; state.flags.restBonus = false; }
   if (a.stress > 100) { // 溢出：每溢出 1 点 → 健康 −1，压力回落到 100
     a.health -= (a.stress - 100);
     a.stress = 100;
@@ -227,12 +226,17 @@ function classifyVenture(text, archetypes) {
   return best || archetypes.find((a) => a.id === 'generic') || archetypes[0];
 }
 
-function startVenture(state, text, archetype) {
+// v0.2: max 2 live lines at once (active + validating). `opts.validateOnly`
+// starts a FREE validation stage — no cost deducted — so a broke player is
+// not locked out of the venture line entirely.
+function startVenture(state, text, archetype, opts) {
+  opts = opts || {};
   const a = state.attrs;
-  if (a.money < archetype.cost) {
-    return { ok: false, error: `启动要 ${archetype.cost} 万，你现在只有 ${a.money} 万。先攒钱（兼职 / 副业），或者先记下来。` };
+  state.ventures = state.ventures || [];
+  const live = state.ventures.filter((v) => v.status === 'active' || v.status === 'validating').length;
+  if (live >= 2) {
+    return { ok: false, error: '同一时间最多经营 2 条线。先把手头的一条跑起来，或者关掉一条，再开新的。' };
   }
-  a.money -= archetype.cost;
   const short = String(text).trim().slice(0, 12);
   const v = {
     id: 'v' + Date.now().toString(36),
@@ -240,12 +244,39 @@ function startVenture(state, text, archetype) {
     archetype: archetype.id,
     text: String(text).trim().slice(0, 200),
     stage: 0,
-    status: 'active',
+    status: opts.validateOnly ? 'validating' : 'active',
     createdTurn: state.turn,
   };
-  state.ventures = state.ventures || [];
+  if (opts.validateOnly) {
+    state.ventures.push(v);
+    return { ok: true, venture: v, validating: true };
+  }
+  if (a.money < archetype.cost) {
+    return { ok: false, error: `启动要 ${archetype.cost} 万，你现在只有 ${a.money} 万。先攒钱（兼职 / 副业），或者先做免费验证。` };
+  }
+  a.money -= archetype.cost;
   state.ventures.push(v);
   return { ok: true, venture: v };
+}
+
+// v0.2: success chance uses the archetype's RELEVANT attribute, not always
+// 专业+人脉. Formula (audit suggestion, simplified): clamp(35, 85,
+// 45 + 0.3 × relevant attribute + 0.1 × network).
+function ventureChance(state, archetype) {
+  const a = state.attrs;
+  const s = a[archetype.attr] || 0;
+  return Math.max(35, Math.min(85, Math.round(45 + s * 0.3 + (a.network || 0) * 0.1)));
+}
+
+// v0.2: second classification layer — theme tags (AI / 求职 / 教育 …),
+// so the revenue model (archetype) and the theme stay separate.
+function ventureThemes(text, themeKeywords) {
+  const t = String(text || '').toLowerCase();
+  const tags = [];
+  for (const th of (themeKeywords || [])) {
+    if ((th.keys || []).some((k) => k && t.includes(k.toLowerCase())) && !tags.includes(th.tag)) tags.push(th.tag);
+  }
+  return tags.slice(0, 3);
 }
 
 const REWARD_NAMES = { money: '钱', skill: '专业', express: '表达', network: '人脉', influence: '影响力', health: '健康' };
@@ -257,30 +288,70 @@ function rewardText(reward) {
 
 // Resolve one venture for a year. `advanced` = the player spent 1 AP on it
 // this year; a running venture pays its passive income regardless.
+// v0.2: a running line pays its archetype's own income (open source pays
+// influence, not cash). A milestone die sealed at advance time is READ here
+// and cleared — never re-rolled (old saves without a sealed die roll fresh).
+// A validating line graduates to active on a passed validation (if the
+// player can afford the startup cost). A line left alone 2 years closes.
 function resolveVentureYear(state, rng, venture, archetype, advanced) {
   const lines = [];
   const a = state.attrs;
   if (venture.status === 'running') {
-    a.money += 2;
-    lines.push(`「${venture.name}」已经跑起来了，本年稳定收入 +2 万。`);
+    for (const [k, v] of Object.entries(archetype.running || {})) a[k] = (a[k] || 0) + v;
+    lines.push(`「${venture.name}」已经跑起来了，本年 ${rewardText(archetype.running)}。`);
+    return lines;
+  }
+  const readSealed = () => {
+    if (venture.sealed) {
+      const s = venture.sealed;
+      venture.sealed = null;
+      return { chance: s.chance, roll: s.roll };
+    }
+    return { chance: ventureChance(state, archetype), roll: rng.int(1, 100) };
+  };
+  if (venture.status === 'validating') {
+    if (!advanced) {
+      lines.push(`「${venture.name}」还在验证：${archetype.validation}`);
+      return lines;
+    }
+    const { chance, roll } = readSealed();
+    if (roll <= chance) {
+      if (a.money >= archetype.cost) {
+        a.money -= archetype.cost;
+        venture.status = 'active';
+        a.skill += 2; a.influence += 1;
+        lines.push(`「${venture.name}」验证通过（掷出 ${roll} ≤ ${chance}），启动资金 ${archetype.cost} 万已投入，正式开干。专业 +2，影响力 +1。`);
+      } else {
+        lines.push(`「${venture.name}」验证通过了（掷出 ${roll} ≤ ${chance}），但启动资金还没攒够（要 ${archetype.cost} 万，你有 ${a.money} 万）。先攒钱，再推进。`);
+      }
+    } else {
+      lines.push(`「${venture.name}」验证没过（掷出 ${roll} > ${chance}）：这一步卡住了，下一年可以再试。`);
+    }
     return lines;
   }
   if (!advanced) {
-    lines.push(`「${venture.name}」今年没推进，停在原地（里程碑 ${venture.stage}/${archetype.milestones.length}）。`);
+    venture.idleYears = (venture.idleYears || 0) + 1;
+    if (venture.idleYears >= 2) {
+      venture.status = 'closed';
+      a.skill += 1;
+      lines.push(`「${venture.name}」两年没推进，关掉了，经验留下了（专业 +1）。`);
+    } else {
+      lines.push(`「${venture.name}」今年没推进，停在原地（里程碑 ${venture.stage}/${archetype.milestones.length}）。再放一年没人管，它就关了。`);
+    }
     return lines;
   }
+  venture.idleYears = 0;
   const ms = archetype.milestones[venture.stage];
   if (!ms) return lines;
-  const chance = Math.max(30, Math.min(90, Math.round(55 + a.skill * 0.2 + a.network * 0.1)));
-  const roll = rng.int(1, 100);
+  const { chance, roll } = readSealed();
   if (roll <= chance) {
     for (const [k, v] of Object.entries(ms.reward || {})) a[k] = (a[k] || 0) + v;
     venture.stage += 1;
     lines.push(`「${venture.name}」里程碑达成：${ms.name}（掷出 ${roll} ≤ ${chance}）。${rewardText(ms.reward)}。`);
     if (venture.stage >= archetype.milestones.length) {
       venture.status = 'running';
-      a.money += 5; a.influence += 5;
-      lines.push(`「${venture.name}」跑起来了：收支打平，开始稳定赚钱（钱 +5 万，影响力 +5）。以后每年 +2 万。`);
+      for (const [k, v] of Object.entries(archetype.complete || {})) a[k] = (a[k] || 0) + v;
+      lines.push(`「${venture.name}」跑起来了：${rewardText(archetype.complete)}。以后每年 ${rewardText(archetype.running)}。`);
     }
   } else {
     if (a.money >= 1) a.money -= 1; else a.stress += 5;
@@ -290,5 +361,5 @@ function resolveVentureYear(state, rng, venture, archetype, advanced) {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { SAVE_KEY, META_KEY, blankAttrs, newRun, saveGame, loadGame, clearSave, exportCode, importCode, loadMeta, saveMeta, pressureTier, settleYear, sealDie, offerTier, layoffChance, gambleChance, tierLabel, classifyVenture, startVenture, resolveVentureYear, rewardText };
+  module.exports = { SAVE_KEY, META_KEY, blankAttrs, newRun, saveGame, loadGame, clearSave, exportCode, importCode, loadMeta, saveMeta, pressureTier, settleYear, sealDie, offerTier, layoffChance, gambleChance, tierLabel, classifyVenture, startVenture, ventureChance, ventureThemes, resolveVentureYear, rewardText };
 }

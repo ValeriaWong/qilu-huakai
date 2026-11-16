@@ -321,7 +321,7 @@ function screenT1() {
   const h0 = s.sealed.H0;
   const tampered = h0 && h0.value >= 60;
   setScreen(`
-    <h1>T1 · 18 岁 · 高考报名</h1>
+    <h1>T1 · 18 岁 · 高考志愿填报</h1>
     <p class="intro">选专业时，有的父母会阻止你报想报的专业，有的不会——从这里开始，你自己做决定。</p>
     <div class="card">
       <p><b>家庭兜底：</b>${esc(s.flags.familySafety || '')}</p>
@@ -334,7 +334,7 @@ function screenT1() {
       <button class="opt" data-act="t1-pick" data-id="insist"><b>坚持自己</b><span>家庭线 −1。专业系数 k = 1.3；家庭经济 ≤2 档时需自挣学费（T2–T5 每年 −1 AP）。</span></button>
       <button class="opt" data-act="t1-pick" data-id="negotiate"><b>谈判，折中</b><span>家庭线不变。专业系数 k = 1.0，留一个以后再谈的口子。</span></button>
     </div>
-    <p class="muted">承诺卡 A（志愿，T5 兑现）：专业锁定 8 年，决定专业成长系数 k。</p>`);
+    <p class="muted">承诺卡 A（志愿，T2–T4 兑现，T5 回顾）：专业锁定 8 年，决定专业成长系数 k。</p>`);
 }
 
 function pickT1(choice) {
@@ -348,13 +348,13 @@ function pickT1(choice) {
   s.flags.majorK = k;
   s.commitments.A = {
     text: '志愿：' + { obey: '听父母的', insist: '坚持自己', negotiate: '谈判折中' }[choice],
-    signedAt: 'T1', dueTurn: 5,
+    signedAt: 'T1', dueTurn: 4,
     snapshot: { skill: a.skill, express: a.express, network: a.network, family: a.family, k },
   };
   autosave('承诺 A 已签署并封存');
   setScreen(`
     <h1>承诺卡 A 已签署</h1>
-    <div class="card"><p>专业系数 k = ${k}，T5 兑现。骰子已封存，兑现时只读档、不重掷。</p>
+    <div class="card"><p>专业系数 k = ${k}，T2–T4 兑现，T5 回顾。骰子已封存，兑现时只读档、不重掷。</p>
     <p class="muted">征兆已记下，兑现那天会拿出来对照：你当时收到过什么信号、忽略了什么。</p></div>
     <div class="actions"><button class="primary" data-act="year-start">进入 T2 · 19 岁</button></div>`);
 }
@@ -377,22 +377,43 @@ function eventCardHtml(ev, s) {
   </div>`;
 }
 
+// v0.2: event gates — an event must pass age AND state checks.
+// student = still in university years (T2–T4); employment / housing read
+// state.flags; hasVenture = any live line; family = has a family to care
+// for (orphan origin has none — no parent-illness events conjured).
+function meetsRequires(req, s) {
+  if (!req) return true;
+  if (req.student && s.turn > 4) return false;
+  if (req.employment && s.flags.employment !== req.employment) return false;
+  if (req.housing && s.flags.housing !== req.housing) return false;
+  if (req.hasVenture && !(s.ventures || []).some((v) => v.status === 'active' || v.status === 'validating' || v.status === 'running')) return false;
+  if (req.family && !(s.origin && s.origin.familyKey !== 'orphan')) return false;
+  return true;
+}
+
 function venturePanelHtml(s) {
-  const vs = (s.ventures || []).filter((v) => v.status !== 'done');
+  const vs = (s.ventures || []).filter((v) => v.status !== 'done' && v.status !== 'closed');
   if (!vs.length) return '';
   return `<div class="card"><h2>我的项目</h2>` + vs.map((v) => {
     const arch = VENTURE_ARCHETYPES.find((a) => a.id === v.archetype);
     if (!arch) return '';
-    const next = v.status === 'running' ? '已跑通，每年 +2 万' : `下一里程碑：${esc(arch.milestones[v.stage].name)}（${v.stage}/${arch.milestones.length}）`;
-    return `<p><b>${esc(v.name)}</b> · ${next}<br><span class="muted">风险：${esc(arch.risk)}</span></p>`;
+    let line;
+    if (v.status === 'running') line = `已跑通，每年 ${esc(rewardText(arch.running))}`;
+    else if (v.status === 'validating') line = `验证中：${esc(arch.validation)}`;
+    else {
+      const next = arch.milestones[v.stage];
+      line = next ? `下一里程碑：${esc(next.name)}（${v.stage}/${arch.milestones.length}）` : '已完成全部里程碑';
+      if (v.sealed) line += ' · 已推进，结果已封存，待结算读取';
+    }
+    return `<p><b>${esc(v.name)}</b> · ${line}<br><span class="muted">风险：${esc(arch.risk)}</span></p>`;
   }).join('') + `</div>`;
 }
 
 function ventureActionHtml(s) {
-  const v = (s.ventures || []).find((x) => x.status === 'active');
+  const v = (s.ventures || []).find((x) => x.status === 'active' || x.status === 'validating');
   if (!v) return '';
   const used = s.flags.advancedVenture === v.id;
-  return `<button class="opt" data-act="venture-advance" ${s.ap < 1 || used ? 'disabled' : ''}><b>推进项目：${esc(v.name)}</b><span>1 AP。今年结算时掷骰判定里程碑。${used ? '（今年已推进）' : ''}</span></button>`;
+  return `<button class="opt" data-act="venture-advance" ${s.ap < 1 || used ? 'disabled' : ''}><b>推进项目：${esc(v.name)}</b><span>1 AP。推进那一刻就封存结果，结算时只读档。${used ? '（今年已推进）' : ''}</span></button>`;
 }
 
 function startYear(turn) {
@@ -400,8 +421,12 @@ function startYear(turn) {
   s.turn = turn;
   s.ap = 3 - (s.flags.nextYearApPenalty || 0);
   if (s.flags.nextYearApPenalty) s.flags.nextYearApPenalty = 0;
-  if (s.flags.selfFunded && turn >= 2 && turn <= 5) s.ap -= 1; // 自挣学费
+  if (s.flags.selfFunded && turn >= 2 && turn <= 4) s.ap -= 1; // 自挣学费（A 卡兑现窗口 T2–T4）
   s.ap = Math.max(1, s.ap);
+  // Housing state: dorm until the internship year, then renting. Events
+  // with a housing gate (ev-rent) read this, not the player's age.
+  if (!s.flags.housing) s.flags.housing = 'dorm';
+  if (turn === 4) s.flags.housing = 'rent';
   s.yearActions = [];
   s.flags.eventChoice = ''; // reset: last year's choice must not leak into this year's brief
   // Independent scheduler: H3 industry cycle, H7 political wind, H9 accident.
@@ -423,10 +448,14 @@ function startYear(turn) {
   s.rngState = rng.getState();
   if (turn === 5) return screenT5();
   if (turn === 6) return screenT6();
-  // Events are age-gated: no weddings at 19, no department contests or rent
-  // hikes while still a student. Fall back to the full pool if empty.
-  const pool = YEAR_EVENTS.filter((e) => !e.minTurn || turn >= e.minTurn);
-  const ev = rng.pick(pool.length ? pool : YEAR_EVENTS);
+  // Events are gated by age AND state (v0.2): no weddings at 19, no
+  // department contests or rent hikes while still a student, no care
+  // events for orphans. Fall back to ungated events if nothing matches.
+  const pool = YEAR_EVENTS.filter((e) => (!e.minTurn || turn >= e.minTurn) && (!e.maxTurn || turn <= e.maxTurn) && meetsRequires(e.requires, s));
+  const fallback = YEAR_EVENTS.filter((e) => !e.requires && (!e.minTurn || turn >= e.minTurn) && (!e.maxTurn || turn <= e.maxTurn));
+  let ev = rng.pick(pool.length ? pool : fallback);
+  // ev-mentor ships two copies (student / work); pick by life stage.
+  if (ev.variants) ev = { ...ev, ...(turn <= 4 ? ev.variants.student : ev.variants.work) };
   s.currentEvent = ev;
   setScreen(`
     <h1>T${turn} · ${17 + turn} 岁</h1>
@@ -449,13 +478,11 @@ function applyAction(id) {
   // and overtime's tense bonus are per-use).
   const fx = { ...ac.fx };
   if (ac.id === 'study' && s.flags.majorK) fx.skill = Math.round(5 * s.flags.majorK);
-  if (ac.id === 'overtime' && pressureTier(a.stress).id === 'tense') {
-    fx.money = Math.round(8 * 1.3);
-    fx.skill = Math.round(2 * 1.3);
+  if (ac.id === 'overtime') {
+    fx.money = s.turn <= 4 ? 1 : 3; // 学生兼职 1 万，在职接单 3 万
+    if (pressureTier(a.stress).id === 'tense') a.stress += 4; // 硬撑：多耗压力，不加钱
   }
   for (const [k, v] of Object.entries(fx)) a[k] = (a[k] || 0) + v;
-  if (ac.id === 'social' && pressureTier(a.stress).id === 'tense') a.stress -= 3;
-  if (ac.id === 'rest') s.flags.restBonus = true;
   a.stress += ac.stress;
   s.yearActions.push(ac.name);
   autosave();
@@ -523,7 +550,7 @@ function screenT5() {
   const s = G.state;
   setScreen(`
     <h1>T5 · 22 岁 · 毕业去向</h1>
-    <p class="intro">承诺卡 A（志愿）今天兑现：专业系数 k = ${s.flags.majorK}，起点已定。同时签下承诺卡 B：第一份工作，锁定城市 × 行业，后续 80% 的机会只从这条线长出来。</p>
+    <p class="intro">承诺卡 A（志愿）已在 T4 兑现——回头看，18 岁的选择把你带到了这里。专业系数 k = ${s.flags.majorK}，起点已定。同时签下承诺卡 B：第一份工作，锁定城市 × 行业，后续 80% 的机会只从这条线长出来。</p>
     <div class="card"><p><b>offer 档位（内部公式）：</b>档位 = floor((专业×0.5 + 表达×0.3 + 人脉×0.2) / 100 × 4) + 1。你当前是 <b>${offerTier(s)} 档</b>（1 小公司 / 2 普通 / 3 好公司 / 4 大厂）。</p></div>
     <div class="options">${T5_JOBS.map((j) => `<button class="opt" data-act="t5-pick" data-id="${j.id}"><b>${j.name}</b><span>${j.desc} 钱 +${j.money} 万/年。</span></button>`).join('')}</div>`);
 }
@@ -534,6 +561,9 @@ function pickT5(id) {
   s.attrs.money += j.money;
   s.attrs.stress += j.stress;
   if (id === 'bigtech') s.flags.highPay = true;
+  // Employment state from here on: gates ev-race / ev-boundary.
+  s.flags.employment = id === 'startup' ? 'startup' : 'employed';
+  s.flags.housing = 'rent';
   s.commitments.B = { text: '第一份工作：' + j.name, signedAt: 'T5', dueTurn: 6, snapshot: { ...s.attrs } };
   autosave('承诺 B 已签署');
   setScreen(`
@@ -580,9 +610,22 @@ function enterSlice(direct) {
     s.attrs.stress = 35 + rng.int(0, 15);
     s.flags.majorK = 1.0;
     s.flags.familySafety = s.origin.attrs.money >= 2 ? '家里能接住你一次，但只有一次。' : '家里接不住你——这条路得你自己走。';
-    s.commitments.A = { text: '志愿：听父母的', signedAt: 'T1', dueTurn: 5, snapshot: {} };
+    s.commitments.A = { text: '志愿：听父母的', signedAt: 'T1', dueTurn: 4, snapshot: {} };
     s.commitments.B = { text: '第一份工作：普通公司', signedAt: 'T5', dueTurn: 6, snapshot: {} };
+    s.flags.employment = 'employed';
+    s.flags.housing = 'rent';
     s.rngState = rng.getState();
+  }
+  // H2: whether the player is laid off is sealed when the slice is entered
+  // — the three decisions only shape the RESPONSE, never the outcome.
+  // (Hidden: sealDie would leak omens, so store it raw on flags.)
+  // A resumed slice keeps its original die.
+  if (!s.flags.h2) {
+    if (s.flags.industryDown) s.flags.deptShrinking = true;
+    const h2chance = layoffChance(s);
+    const h2roll = G.rng.int(1, 100);
+    s.flags.h2 = { chance: h2chance, roll: h2roll, laidOff: h2roll <= h2chance };
+    s.rngState = G.rng.getState();
   }
   s.turn = 9; s.ap = 3;
   s.sliceStart = Date.now();
@@ -591,16 +634,39 @@ function enterSlice(direct) {
   renderSliceDecision();
 }
 
+// Borrow decision options, computed from the player's actual cash (v0.2):
+// 缺口 = max(0, 3 − 存款). Broke players borrow the gap; players with
+// savings get by on them instead.
+function sliceBorrowOptions(s) {
+  const money = s.attrs.money || 0;
+  const gap = Math.max(0, Math.round((3 - money) * 10) / 10);
+  if (gap <= 0) {
+    return [
+      { text: '靠储蓄，不借', fx: { stress: -2 }, seal: '你算了一下存款，够撑三个月。这笔账不用跟家里开这个口。', omen: '你把存款 App 的数字截了个图，存进了备忘录。' },
+      { text: '借 1 万以防万一', fx: { money: 1, stress: -2 }, seal: '你跟家里借了 1 万垫底。妈妈说：“不够再说。”', omen: '转账到账的短信提示音，在深夜格外响。' },
+      { text: '压缩开支，硬扛', fx: { money: 0.5, stress: 2 }, seal: '你把下个月的预算砍了一半。外卖换成了自己做饭。', omen: '你打开记账 App，删掉了三个订阅。' },
+    ];
+  }
+  const half = Math.round((gap / 2) * 10) / 10;
+  return [
+    { text: `跟家里借 ${gap} 万`, fx: { money: gap, family: -1, stress: -5 }, seal: '妈妈没问为什么，只说了一句：“卡号发来。”家庭线 −1——不是关系坏了，是你开始记账了。', omen: '转账到账的短信提示音，在深夜格外响。' },
+    { text: '不借，自己扛', fx: { stress: 6 }, seal: '你没开口。这三个月会很难，但你想试试不靠家里能走多远。', omen: '你打开存款 App，看了一眼余额，又关上了。' },
+    { text: `借一半，${half} 万`, fx: { money: half, stress: -2 }, seal: `你借了 ${half} 万。一半靠家里，一半靠自己——这是你能接受的中间态。`, omen: '妈妈多转了 5000，备注写着“别省着”。' },
+  ];
+}
+
 function renderSliceDecision() {
   const s = G.state;
   const d = T9_SLICE.decisions[s.sliceStep];
+  const options = d.dynamic === 'borrow' ? sliceBorrowOptions(s) : d.options;
+  G.sliceOptions = options;
   const elapsed = Math.floor((Date.now() - (s.sliceStart || Date.now())) / 1000);
   setScreen(`
     <h1>T9 · 26 岁 · 裁员之夜</h1>
     <p class="intro">${esc(T9_SLICE.intro)}</p>
     <p class="muted">切片用时 ${elapsed} 秒 · 第 ${s.sliceStep + 1} 个决定 / 共 3 个 · 第一个决定在 90 秒内出现（本切片直接开局即是）。</p>
     <div class="card big"><h2>${esc(d.title)}</h2><p>${esc(d.body)}</p>
-      <div class="options">${d.options.map((o, i) => `<button class="opt" data-act="slice-pick" data-id="${i}"><b>${esc(o.text)}</b></button>`).join('')}</div>
+      <div class="options">${options.map((o, i) => `<button class="opt" data-act="slice-pick" data-id="${i}"><b>${esc(o.text)}</b></button>`).join('')}</div>
     </div>
     <p class="muted">每个决定都会封存并自动保存。承诺 C（裁员应对）兑现从 T10 开始。</p>`);
 }
@@ -608,7 +674,7 @@ function renderSliceDecision() {
 function pickSlice(i) {
   const s = G.state;
   const d = T9_SLICE.decisions[s.sliceStep];
-  const o = d.options[i];
+  const o = (G.sliceOptions || d.options)[i];
   for (const [k, v] of Object.entries(o.fx)) s.attrs[k] = (s.attrs[k] || 0) + v;
   s.decisions[d.id] = { text: o.text, seal: o.seal };
   if (o.omen) s.omenLog.push({ turn: 9, text: o.omen });
@@ -623,6 +689,25 @@ function sliceEnd() {
   const s = G.state;
   G.meta.runsFinished = (G.meta.runsFinished || 0) + 1;
   saveMeta(G.meta);
+  // H2 resolution: the layoff die was sealed on entering the slice — read
+  // it here and apply the compensation. N = 工龄 4 年 × 月薪 2 万 = 8 万；
+  // the +1 代通知金 depends on the dismissal ground, so it is NOT automatic.
+  let h2Card = '';
+  const h2 = s.flags.h2;
+  if (h2) {
+    const hr = s.decisions['hr-talk'];
+    const triedTransfer = hr && hr.text.includes('转岗');
+    if (h2.laidOff) {
+      s.attrs.money += 8;
+      h2Card = `<div class="card"><h2>裁员判定：你被裁了</h2><p>进切片时封存的骰子：掷出 ${h2.roll} ≤ ${h2.chance}（H2 裁员概率）。你在同一家公司 4 年，月薪 2 万，N = 8 万到账。${triedTransfer ? '你争取过转岗，但没有真实岗位空出来。' : ''}代通知金是否另算，取决于解除情形——谈话里你问清楚了没有？</p></div>`;
+    } else if (triedTransfer) {
+      s.attrs.stress = Math.max(0, s.attrs.stress - 5);
+      h2Card = `<div class="card"><h2>裁员判定：岗位保住了</h2><p>进切片时封存的骰子：掷出 ${h2.roll} > ${h2.chance}（H2 裁员概率）。你不在这一批名单里。转岗谈成了——转到了新项目组，压力 −5。</p></div>`;
+    } else {
+      s.attrs.stress += 5;
+      h2Card = `<div class="card"><h2>裁员判定：岗位保住了</h2><p>进切片时封存的骰子：掷出 ${h2.roll} > ${h2.chance}（H2 裁员概率）。你不在这一批名单里，但项目被砍了，压力 +5。</p></div>`;
+    }
+  }
   const decs = T9_SLICE.decisions.map((d) => {
     const got = s.decisions[d.id];
     return `<p><b>${esc(d.title)}</b><br>${got ? esc(got.text) + '——' + esc(got.seal) : '未决定'}</p>`;
@@ -631,6 +716,7 @@ function sliceEnd() {
   setScreen(`
     <h1>切片结束 · 26 岁这一夜</h1>
     <p class="intro">${esc(T9_SLICE.outro)}</p>
+    ${h2Card}
     <div class="card">${decs}</div>
     <div class="card"><h2>征兆回放</h2><p>${esc(omens || '今夜没有征兆。')}</p></div>
     <div class="card"><h2>你的状态</h2>
@@ -720,8 +806,41 @@ document.addEventListener('click', (e) => {
       const text = ($('#idea-text').value || '').trim();
       if (text.length < 2) { alert('先写一句你的点子。'); break; }
       const arch = classifyVenture(text, VENTURE_ARCHETYPES);
+      const themes = ventureThemes(text, THEME_KEYWORDS);
+      G.pendingIdea = { text, archId: arch.id, themes };
+      const archOptions = VENTURE_ARCHETYPES.map((a) => `<option value="${a.id}" ${a.id === arch.id ? 'selected' : ''}>${esc(a.name)}（启动 ${a.cost} 万）</option>`).join('');
+      setScreen(`
+        <h1>确认一下这条线</h1>
+        <div class="card big">
+          <p>你的原话：“${esc(text)}”</p>
+          <p>系统识别为：<b>${esc(arch.name)}</b>${themes.length ? ' · 主题：' + themes.map((t) => esc(t)).join('、') : ''}</p>
+          <p>如果分错了，换一个：<select id="idea-arch">${archOptions}</select></p>
+          <p id="idea-arch-detail"></p>
+          <p class="muted">分类只是第一版判断，最终以你选的为准。</p>
+        </div>
+        <div class="actions">
+          <button class="primary" data-act="idea-confirm">确认开始</button>
+          <button data-act="idea-validate">先做免费验证</button>
+          <button data-act="idea-note">先记下来</button>
+          <button data-act="idea-back">返回改想法</button>
+        </div>`);
+      const updateDetail = () => {
+        const sel = $('#idea-arch');
+        const a = VENTURE_ARCHETYPES.find((x) => x.id === (sel ? sel.value : arch.id)) || arch;
+        const el = $('#idea-arch-detail');
+        if (el) el.innerHTML = `启动 ${a.cost} 万 · 风险：${esc(a.risk)}<br>先验证（免费）：${esc(a.validation)}<br>里程碑：${a.milestones.map((m, i) => `${i + 1}. ${esc(m.name)}`).join('；')}<br>跑通后每年：${esc(rewardText(a.running))}`;
+      };
+      const selEl = $('#idea-arch');
+      if (selEl) selEl.addEventListener('change', updateDetail);
+      updateDetail();
+      break;
+    }
+    case 'idea-confirm': {
+      const sel = $('#idea-arch');
+      const arch = VENTURE_ARCHETYPES.find((x) => x.id === (sel ? sel.value : (G.pendingIdea && G.pendingIdea.archId))) || VENTURE_ARCHETYPES[0];
+      const text = (G.pendingIdea && G.pendingIdea.text) || '';
       const r = startVenture(G.state, text, arch);
-      if (!r.ok) { const h = $('#idea-hint'); if (h) h.textContent = r.error; break; }
+      if (!r.ok) { alert(r.error); break; }
       const v = r.venture;
       G.state.flags.eventChoice = '赚钱点子 → 开始了「' + v.name + '」';
       G.state.omenLog.push({ turn: G.state.turn, text: '你写下第一行计划的那天晚上，停电了。' });
@@ -731,28 +850,59 @@ document.addEventListener('click', (e) => {
         <div class="card big"><h2>${esc(v.name)}</h2>
           <p>${esc(arch.name)} · 启动 ${arch.cost} 万已付 · 风险：${esc(arch.risk)}</p>
           <p>里程碑：${arch.milestones.map((m, i) => `${i + 1}. ${esc(m.name)}（${esc(rewardText(m.reward))}）`).join('；')}</p>
-          <p class="muted">你的原话写进了这条线：“${esc(v.text.slice(0, 60))}”。每年花 1 AP 推进，结算时掷骰判定；跑通后每年稳定 +2 万。</p>
+          <p>跑通后每年：${esc(rewardText(arch.running))}。</p>
+          <p class="muted">你的原话写进了这条线：“${esc(v.text.slice(0, 60))}”。每年花 1 AP 推进，推进那一刻就封存结果，结算时只读档。</p>
         </div>
         <div class="actions"><button class="primary" data-act="year-refresh">回到今年</button></div>`);
+      G.pendingIdea = null;
       break;
     }
+    case 'idea-validate': {
+      const sel = $('#idea-arch');
+      const arch = VENTURE_ARCHETYPES.find((x) => x.id === (sel ? sel.value : (G.pendingIdea && G.pendingIdea.archId))) || VENTURE_ARCHETYPES[0];
+      const text = (G.pendingIdea && G.pendingIdea.text) || '';
+      const r = startVenture(G.state, text, arch, { validateOnly: true });
+      if (!r.ok) { alert(r.error); break; }
+      const v = r.venture;
+      G.state.flags.eventChoice = '赚钱点子 → 开始验证「' + v.name + '」';
+      autosave('验证已开始');
+      setScreen(`
+        <h1>验证开始了</h1>
+        <div class="card big"><h2>${esc(v.name)}</h2>
+          <p>验证中，不花钱：${esc(arch.validation)}</p>
+          <p class="muted">每年花 1 AP 推进验证，通过后再付启动费 ${arch.cost} 万正式开干。你的原话：“${esc(v.text.slice(0, 60))}”。</p>
+        </div>
+        <div class="actions"><button class="primary" data-act="year-refresh">回到今年</button></div>`);
+      G.pendingIdea = null;
+      break;
+    }
+    case 'idea-back': G.pendingIdea = null; startYearRefresh(); break;
     case 'idea-note': {
-      const text = ($('#idea-text').value || '').trim();
+      const text = ((G.pendingIdea && G.pendingIdea.text) || ($('#idea-text') ? $('#idea-text').value : '') || '').trim();
       if (text.length < 2) { alert('先写一句你的点子。'); break; }
       G.state.ideaNotes = G.state.ideaNotes || [];
       G.state.ideaNotes.push({ turn: G.state.turn, text: text.slice(0, 200) });
       G.state.flags.eventChoice = '赚钱点子 → 先记下来了';
+      G.pendingIdea = null;
       autosave('点子已记下');
       startYearRefresh();
       break;
     }
     case 'venture-advance': {
       const s = G.state;
-      const v = (s.ventures || []).find((x) => x.status === 'active');
+      const v = (s.ventures || []).find((x) => x.status === 'active' || x.status === 'validating');
       if (!v || s.ap < 1 || s.flags.advancedVenture) break;
+      const arch = VENTURE_ARCHETYPES.find((a) => a.id === v.archetype);
       s.ap -= 1;
       s.attrs.stress += 3;
       s.flags.advancedVenture = v.id;
+      if (arch) {
+        // Seal the die NOW: the settlement only reads it, never re-rolls.
+        const chance = ventureChance(s, arch);
+        const roll = G.rng.int(1, 100);
+        v.sealed = { roll, chance, stage: v.stage, success: roll <= chance };
+        s.rngState = G.rng.getState();
+      }
       s.yearActions.push('推进项目：' + v.name);
       autosave();
       startYearRefresh();
