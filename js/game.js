@@ -388,7 +388,10 @@ function startYear(turn) {
   s.rngState = rng.getState();
   if (turn === 5) return screenT5();
   if (turn === 6) return screenT6();
-  const ev = rng.pick(YEAR_EVENTS);
+  // Events are age-gated: no weddings at 19, no department contests or rent
+  // hikes while still a student. Fall back to the full pool if empty.
+  const pool = YEAR_EVENTS.filter((e) => !e.minTurn || turn >= e.minTurn);
+  const ev = rng.pick(pool.length ? pool : YEAR_EVENTS);
   s.currentEvent = ev;
   setScreen(`
     <h1>T${turn} · ${17 + turn} 岁</h1>

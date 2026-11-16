@@ -166,20 +166,22 @@ const ACTIONS = [
 ];
 
 // Generic yearly events (fast-forward years). Each has a small choice.
+// minTurn = earliest turn (T2 = 19, T7 = 24) the event may fire. No weddings
+// at 19, no department contests while still a student, no rent hikes in a dorm.
 const YEAR_EVENTS = [
-  { id: 'ev-race', title: '部门突然要搞一次内部竞赛', body: '赢了有奖金和曝光，输了也没什么损失，只是要搭进去两个周末。', options: [
+  { id: 'ev-race', minTurn: 5, title: '部门突然要搞一次内部竞赛', body: '赢了有奖金和曝光，输了也没什么损失，只是要搭进去两个周末。', options: [
     { text: '参加，拼一把', fx: { skill: 3, stress: 6 }, omen: '你报名的那天，组长多看了你一眼。' },
     { text: '算了，最近太累了', fx: { stress: -4 }, omen: '你退出的那天，工位对面的同事替你去了。' },
   ]},
-  { id: 'ev-mentor', title: '一位前辈想带你做个小项目', body: '不算正式任务，但他说“做成了算你的”。', options: [
+  { id: 'ev-mentor', minTurn: 3, title: '一位前辈想带你做个小项目', body: '不算正式任务，但他说“做成了算你的”。', options: [
     { text: '跟他干', fx: { network: 4, skill: 2, stress: 4 }, omen: '他第一次在会上提你名字时，你正在改 bug。' },
     { text: '先把手头的事做完', fx: { skill: 1 }, omen: '他后来找了别人。那个项目上了公司的内网首页。' },
   ]},
-  { id: 'ev-rent', title: '房东要涨租', body: '涨 800，要么接受，要么搬家，要么跟合租室友商量分摊。', options: [
+  { id: 'ev-rent', minTurn: 4, title: '房东要涨租', body: '涨 800，要么接受，要么搬家，要么跟合租室友商量分摊。', options: [
     { text: '接受，省得折腾', fx: { money: -1, stress: 2 }, omen: '签完新合同的那个晚上，你算了一下存款。' },
     { text: '搬去远一点的地方', fx: { money: 1, stress: 5 }, omen: '新家的通勤多 40 分钟，你开始在地铁上看书。' },
   ]},
-  { id: 'ev-friend', title: '大学同学结婚，请你去当伴郎 / 伴娘', body: '随份子 1000，还要请一天假。', options: [
+  { id: 'ev-friend', minTurn: 7, title: '大学同学结婚，请你去当伴郎 / 伴娘', body: '随份子 1000，还要请一天假。', options: [
     { text: '去，好好聚一次', fx: { money: -1, stress: -6, network: 2 }, omen: '婚礼上你们聊起了毕业那年的打算。' },
     { text: '发个红包，人就不去了', fx: { money: -1, network: -1 }, omen: '你看着朋友圈的照片，忽然有点想他们。' },
   ]},
