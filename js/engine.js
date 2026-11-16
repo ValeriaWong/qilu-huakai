@@ -229,6 +229,10 @@ function classifyVenture(text, archetypes) {
 // v0.2: max 2 live lines at once (active + validating). `opts.validateOnly`
 // starts a FREE validation stage — no cost deducted — so a broke player is
 // not locked out of the venture line entirely.
+// v0.3: `opts.costOverride` lets the AI review set the startup cost (the
+// verdict is the final result); `opts.aiReviewed`/`opts.aiNote` record it
+// on the venture. The agreed cost is stored on the venture so the
+// validating branch charges the same number later.
 function startVenture(state, text, archetype, opts) {
   opts = opts || {};
   const a = state.attrs;
@@ -237,6 +241,7 @@ function startVenture(state, text, archetype, opts) {
   if (live >= 2) {
     return { ok: false, error: '同一时间最多经营 2 条线。先把手头的一条跑起来，或者关掉一条，再开新的。' };
   }
+  const cost = (typeof opts.costOverride === 'number' && isFinite(opts.costOverride)) ? opts.costOverride : archetype.cost;
   const short = String(text).trim().slice(0, 12);
   const v = {
     id: 'v' + Date.now().toString(36),
@@ -246,15 +251,20 @@ function startVenture(state, text, archetype, opts) {
     stage: 0,
     status: opts.validateOnly ? 'validating' : 'active',
     createdTurn: state.turn,
+    cost,
   };
+  if (opts.aiReviewed) {
+    v.aiReviewed = true;
+    v.aiNote = String(opts.aiNote || '').slice(0, 120);
+  }
   if (opts.validateOnly) {
     state.ventures.push(v);
     return { ok: true, venture: v, validating: true };
   }
-  if (a.money < archetype.cost) {
-    return { ok: false, error: `启动要 ${archetype.cost} 万，你现在只有 ${a.money} 万。先攒钱（兼职 / 副业），或者先做免费验证。` };
+  if (a.money < cost) {
+    return { ok: false, error: `启动要 ${cost} 万，你现在只有 ${a.money} 万。先攒钱（兼职 / 副业），或者先做免费验证。` };
   }
-  a.money -= archetype.cost;
+  a.money -= cost;
   state.ventures.push(v);
   return { ok: true, venture: v };
 }
@@ -315,14 +325,15 @@ function resolveVentureYear(state, rng, venture, archetype, advanced) {
       return lines;
     }
     const { chance, roll } = readSealed();
+    const cost = (typeof venture.cost === 'number') ? venture.cost : archetype.cost;
     if (roll <= chance) {
-      if (a.money >= archetype.cost) {
-        a.money -= archetype.cost;
+      if (a.money >= cost) {
+        a.money -= cost;
         venture.status = 'active';
         a.skill += 2; a.influence += 1;
-        lines.push(`「${venture.name}」验证通过（掷出 ${roll} ≤ ${chance}），启动资金 ${archetype.cost} 万已投入，正式开干。专业 +2，影响力 +1。`);
+        lines.push(`「${venture.name}」验证通过（掷出 ${roll} ≤ ${chance}），启动资金 ${cost} 万已投入，正式开干。专业 +2，影响力 +1。`);
       } else {
-        lines.push(`「${venture.name}」验证通过了（掷出 ${roll} ≤ ${chance}），但启动资金还没攒够（要 ${archetype.cost} 万，你有 ${a.money} 万）。先攒钱，再推进。`);
+        lines.push(`「${venture.name}」验证通过了（掷出 ${roll} ≤ ${chance}），但启动资金还没攒够（要 ${cost} 万，你有 ${a.money} 万）。先攒钱，再推进。`);
       }
     } else {
       lines.push(`「${venture.name}」验证没过（掷出 ${roll} > ${chance}）：这一步卡住了，下一年可以再试。`);

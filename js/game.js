@@ -756,6 +756,64 @@ function doImport() {
   screenTitle();
 }
 
+// v0.3: idea confirm screen. G.pendingIdea = { text, archId, themes,
+//   explanation, aiReviewing, aiVerdict: null | {reasonable, archetypeId,
+//   cost, reason}, aiError: '' }.
+// AI review is opt-in: only when the player taps 请 AI 审核 is the idea
+// (plus their explanation) sent to a free keyless AI endpoint; the verdict
+// is the FINAL result — it sets the archetype and startup cost. If the
+// verdict says the idea does not hold up, direct start is closed and the
+// player either revises or validates for free. If the AI cannot be reached,
+// the keyword result stands and the screen says so.
+function renderIdeaConfirm() {
+  const p = G.pendingIdea;
+  if (!p) return;
+  const arch = VENTURE_ARCHETYPES.find((x) => x.id === p.archId) || VENTURE_ARCHETYPES[0];
+  const archOptions = VENTURE_ARCHETYPES.map((a) => `<option value="${a.id}" ${a.id === arch.id ? 'selected' : ''}>${esc(a.name)}（启动 ${a.cost} 万）</option>`).join('');
+  const v = p.aiVerdict;
+  let verdictHtml = '';
+  if (p.aiReviewing) {
+    verdictHtml = '<p class="muted">AI 审核中，请稍等…</p>';
+  } else if (v && v.reasonable) {
+    const va = VENTURE_ARCHETYPES.find((x) => x.id === v.archetypeId) || arch;
+    verdictHtml = `<p class="ai-verdict ok">AI 审核通过：归类为 <b>${esc(va.name)}</b>，启动成本 <b>${v.cost} 万</b>（AI 定）。理由：${esc(v.reason)}</p>`;
+  } else if (v && !v.reasonable) {
+    verdictHtml = `<p class="ai-verdict no">AI 觉得这条线不太成立：${esc(v.reason)}直接开线已关闭，你可以改想法，或者先做免费验证。</p>`;
+  } else if (p.aiError) {
+    verdictHtml = `<p class="muted">AI 没连上（${esc(p.aiError)}），先按关键词分类开线。</p>`;
+  }
+  const canDirect = !(v && !v.reasonable);
+  setScreen(`
+    <h1>确认一下这条线</h1>
+    <div class="card big">
+      <p>你的原话：“${esc(p.text)}”</p>
+      <p>系统识别为：<b>${esc(arch.name)}</b>${p.themes.length ? ' · 主题：' + p.themes.map((t) => esc(t)).join('、') : ''}</p>
+      <p>如果分错了，换一个：<select id="idea-arch">${archOptions}</select></p>
+      <p id="idea-arch-detail"></p>
+      ${verdictHtml}
+      <p>想跟 AI 说明合理性？写一句补充（可选）：<br><textarea id="idea-why" rows="2" placeholder="比如：身边真有人为改简历付费，我自己改过 20 份。">${esc(p.explanation || '')}</textarea></p>
+      <p class="muted">点“请 AI 审核”会把点子和补充说明发给一个免费 AI 接口（不用登录、不用付费），由它定最终的分法和启动费；不点就按关键词分类开线。</p>
+    </div>
+    <div class="actions">
+      <button data-act="idea-ai-review">请 AI 审核</button>
+      ${canDirect ? '<button class="primary" data-act="idea-confirm">确认开始</button>' : ''}
+      <button data-act="idea-validate">先做免费验证</button>
+      <button data-act="idea-note">先记下来</button>
+      <button data-act="idea-back">返回改想法</button>
+    </div>`);
+  const updateDetail = () => {
+    const sel = $('#idea-arch');
+    const a = VENTURE_ARCHETYPES.find((x) => x.id === (sel ? sel.value : arch.id)) || arch;
+    const el = $('#idea-arch-detail');
+    if (!el) return;
+    const aiCost = (v && v.reasonable && a.id === v.archetypeId) ? v.cost : null;
+    el.innerHTML = `启动 ${aiCost !== null ? aiCost + ' 万（AI 定）' : a.cost + ' 万'} · 风险：${esc(a.risk)}<br>先验证（免费）：${esc(a.validation)}<br>里程碑：${a.milestones.map((m, i) => `${i + 1}. ${esc(m.name)}`).join('；')}<br>跑通后每年：${esc(rewardText(a.running))}`;
+  };
+  const selEl = $('#idea-arch');
+  if (selEl) selEl.addEventListener('change', updateDetail);
+  updateDetail();
+}
+
 document.addEventListener('click', (e) => {
   const el = e.target.closest('[data-act]');
   if (!el) return;
@@ -807,51 +865,58 @@ document.addEventListener('click', (e) => {
       if (text.length < 2) { alert('先写一句你的点子。'); break; }
       const arch = classifyVenture(text, VENTURE_ARCHETYPES);
       const themes = ventureThemes(text, THEME_KEYWORDS);
-      G.pendingIdea = { text, archId: arch.id, themes };
-      const archOptions = VENTURE_ARCHETYPES.map((a) => `<option value="${a.id}" ${a.id === arch.id ? 'selected' : ''}>${esc(a.name)}（启动 ${a.cost} 万）</option>`).join('');
-      setScreen(`
-        <h1>确认一下这条线</h1>
-        <div class="card big">
-          <p>你的原话：“${esc(text)}”</p>
-          <p>系统识别为：<b>${esc(arch.name)}</b>${themes.length ? ' · 主题：' + themes.map((t) => esc(t)).join('、') : ''}</p>
-          <p>如果分错了，换一个：<select id="idea-arch">${archOptions}</select></p>
-          <p id="idea-arch-detail"></p>
-          <p class="muted">分类只是第一版判断，最终以你选的为准。</p>
-        </div>
-        <div class="actions">
-          <button class="primary" data-act="idea-confirm">确认开始</button>
-          <button data-act="idea-validate">先做免费验证</button>
-          <button data-act="idea-note">先记下来</button>
-          <button data-act="idea-back">返回改想法</button>
-        </div>`);
-      const updateDetail = () => {
-        const sel = $('#idea-arch');
-        const a = VENTURE_ARCHETYPES.find((x) => x.id === (sel ? sel.value : arch.id)) || arch;
-        const el = $('#idea-arch-detail');
-        if (el) el.innerHTML = `启动 ${a.cost} 万 · 风险：${esc(a.risk)}<br>先验证（免费）：${esc(a.validation)}<br>里程碑：${a.milestones.map((m, i) => `${i + 1}. ${esc(m.name)}`).join('；')}<br>跑通后每年：${esc(rewardText(a.running))}`;
-      };
-      const selEl = $('#idea-arch');
-      if (selEl) selEl.addEventListener('change', updateDetail);
-      updateDetail();
+      G.pendingIdea = { text, archId: arch.id, themes, explanation: '', aiReviewing: false, aiVerdict: null, aiError: '' };
+      renderIdeaConfirm();
+      break;
+    }
+    case 'idea-ai-review': {
+      const p = G.pendingIdea;
+      if (!p || p.aiReviewing) break;
+      const why = $('#idea-why');
+      if (why) p.explanation = why.value.trim().slice(0, 200);
+      p.aiReviewing = true;
+      renderIdeaConfirm();
+      const guess = VENTURE_ARCHETYPES.find((x) => x.id === p.archId) || VENTURE_ARCHETYPES[0];
+      reviewVentureWithAI(p.text, p.explanation, VENTURE_ARCHETYPES, guess).then((res) => {
+        if (!G.pendingIdea || G.pendingIdea.text !== p.text) return;
+        G.pendingIdea.aiReviewing = false;
+        if (res.ok) {
+          G.pendingIdea.aiVerdict = res.verdict;
+          G.pendingIdea.aiError = '';
+          if (res.verdict.reasonable) G.pendingIdea.archId = res.verdict.archetypeId;
+        } else {
+          G.pendingIdea.aiVerdict = null;
+          G.pendingIdea.aiError = res.error;
+        }
+        renderIdeaConfirm();
+      });
       break;
     }
     case 'idea-confirm': {
       const sel = $('#idea-arch');
       const arch = VENTURE_ARCHETYPES.find((x) => x.id === (sel ? sel.value : (G.pendingIdea && G.pendingIdea.archId))) || VENTURE_ARCHETYPES[0];
       const text = (G.pendingIdea && G.pendingIdea.text) || '';
-      const r = startVenture(G.state, text, arch);
+      const v = G.pendingIdea && G.pendingIdea.aiVerdict;
+      const opts = {};
+      if (v && v.reasonable && arch.id === v.archetypeId) {
+        opts.costOverride = v.cost;
+        opts.aiReviewed = true;
+        opts.aiNote = v.reason;
+      }
+      const r = startVenture(G.state, text, arch, opts);
       if (!r.ok) { alert(r.error); break; }
-      const v = r.venture;
-      G.state.flags.eventChoice = '赚钱点子 → 开始了「' + v.name + '」';
+      const vv = r.venture;
+      G.state.flags.eventChoice = '赚钱点子 → 开始了「' + vv.name + '」';
       G.state.omenLog.push({ turn: G.state.turn, text: '你写下第一行计划的那天晚上，停电了。' });
       autosave('专属线已生成');
       setScreen(`
         <h1>专属线已生成</h1>
-        <div class="card big"><h2>${esc(v.name)}</h2>
-          <p>${esc(arch.name)} · 启动 ${arch.cost} 万已付 · 风险：${esc(arch.risk)}</p>
+        <div class="card big"><h2>${esc(vv.name)}</h2>
+          <p>${esc(arch.name)} · 启动 ${vv.cost} 万已付 · 风险：${esc(arch.risk)}</p>
+          ${vv.aiReviewed ? `<p>AI 审核：${esc(vv.aiNote)}</p>` : ''}
           <p>里程碑：${arch.milestones.map((m, i) => `${i + 1}. ${esc(m.name)}（${esc(rewardText(m.reward))}）`).join('；')}</p>
           <p>跑通后每年：${esc(rewardText(arch.running))}。</p>
-          <p class="muted">你的原话写进了这条线：“${esc(v.text.slice(0, 60))}”。每年花 1 AP 推进，推进那一刻就封存结果，结算时只读档。</p>
+          <p class="muted">你的原话写进了这条线：“${esc(vv.text.slice(0, 60))}”。每年花 1 AP 推进，推进那一刻就封存结果，结算时只读档。</p>
         </div>
         <div class="actions"><button class="primary" data-act="year-refresh">回到今年</button></div>`);
       G.pendingIdea = null;
@@ -861,16 +926,24 @@ document.addEventListener('click', (e) => {
       const sel = $('#idea-arch');
       const arch = VENTURE_ARCHETYPES.find((x) => x.id === (sel ? sel.value : (G.pendingIdea && G.pendingIdea.archId))) || VENTURE_ARCHETYPES[0];
       const text = (G.pendingIdea && G.pendingIdea.text) || '';
-      const r = startVenture(G.state, text, arch, { validateOnly: true });
+      const v = G.pendingIdea && G.pendingIdea.aiVerdict;
+      const opts = { validateOnly: true };
+      if (v && v.reasonable && arch.id === v.archetypeId) {
+        opts.aiReviewed = true;
+        opts.aiNote = v.reason;
+      }
+      const r = startVenture(G.state, text, arch, opts);
       if (!r.ok) { alert(r.error); break; }
-      const v = r.venture;
-      G.state.flags.eventChoice = '赚钱点子 → 开始验证「' + v.name + '」';
+      const vv = r.venture;
+      G.state.flags.eventChoice = '赚钱点子 → 开始验证「' + vv.name + '」';
       autosave('验证已开始');
       setScreen(`
         <h1>验证开始了</h1>
-        <div class="card big"><h2>${esc(v.name)}</h2>
+        <div class="card big"><h2>${esc(vv.name)}</h2>
           <p>验证中，不花钱：${esc(arch.validation)}</p>
-          <p class="muted">每年花 1 AP 推进验证，通过后再付启动费 ${arch.cost} 万正式开干。你的原话：“${esc(v.text.slice(0, 60))}”。</p>
+          ${vv.aiReviewed ? `<p>AI 审核：${esc(vv.aiNote)}</p>` : ''}
+          ${v && !v.reasonable ? `<p>AI 的看法：${esc(v.reason)}</p>` : ''}
+          <p class="muted">每年花 1 AP 推进验证，通过后再付启动费 ${vv.cost} 万正式开干。你的原话：“${esc(vv.text.slice(0, 60))}”。</p>
         </div>
         <div class="actions"><button class="primary" data-act="year-refresh">回到今年</button></div>`);
       G.pendingIdea = null;
