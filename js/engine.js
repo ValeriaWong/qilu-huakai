@@ -183,13 +183,28 @@ function offerTier(state) {
 }
 
 function layoffChance(state) {
-  // H2: 20% + 15% × score, clamp 20–80%. score = hits of 4 risk factors.
+  // H2: score = hits of 4 risk factors (highPay / no protector / low KPI
+  // / shrinking dept). The chance itself is computed by t9H2Chance
+  // (era.js) — see below.
   const a = state.attrs;
   let score = 0;
   if (state.flags.highPay) score += 1;
   if (!state.flags.hasProtector) score += 1;
   if (state.flags.lowKpi) score += 1;
   if (state.flags.deptShrinking) score += 1;
+  // P1 (a, recheck 2026-11-17 P0): the chance is the additive formula
+  //   P(H2) = clamp(5%, 85%, 20% + 15% x score + Y + I)
+  // Y by crisis year, I by crisis year + industry — both read from the
+  // era.js tables (t9H2Chance). Y/I apply ONLY to this H2 determination,
+  // never to the other T9 crisis branches. Legacy / direct-slice runs
+  // have no era -> Y = I = 0, and the formula reduces to the old numbers
+  // for every reachable score (0-4). t9H2Chance lives in era.js (loaded
+  // before this file); the typeof guard keeps this callable without it.
+  if (typeof t9H2Chance === 'function') {
+    const era = state.flags && state.flags.era;
+    const crisisYear = era && era.examYear ? era.examYear + 8 : undefined;
+    return t9H2Chance(score, crisisYear, state.flags.jobIndustry);
+  }
   return Math.max(20, Math.min(80, 20 + 15 * score));
 }
 
@@ -355,9 +370,12 @@ function bestReachableMajor(score, line1) {
 }
 
 // v0.4: resolve the T1 admission outcome from the sealed Gaokao score.
-// Returns { major, tier, k, note }. tier: '本科' | '本科（调剂）' | '专科'.
+// Returns { major, tier, k, note, adjusted }. tier: '本科' | '本科（调剂）' | '专科'.
 // Below 一段线 -> 专科, k = 0.8 (the design's 0.8 slot). Below the chosen
-// major's line but above 一段线 -> 调剂 to the best reachable major, k = 1.0.
+// major's line but above 一段线 -> 调剂 to the best reachable major.
+// P1 (e): 调剂 does NOT drop k — the stance k stands; it costs stress
+// +8 and unlocks the 转专业 action (applied by the caller, game.js
+// pickT1, from the returned `adjusted` flag).
 function resolveAdmission(state, intendedMajor, stanceK) {
   const g = state.flags.gaokao || {};
   // v0.5.1: the sealed score is the base only. Old saves may carry a
@@ -366,13 +384,13 @@ function resolveAdmission(state, intendedMajor, stanceK) {
   const line1 = g.line1 || 442;
   const line = majorAdmissionLine(intendedMajor, line1);
   if (eff < line1) {
-    return { major: intendedMajor, tier: '专科', k: 0.8, note: `总分 ${eff}，未过一段线 ${line1}：本科批次无缘，走专科批次。专业系数 k = 0.8。` };
+    return { major: intendedMajor, tier: '专科', k: 0.8, adjusted: false, note: `总分 ${eff}，未过一段线 ${line1}：本科批次无缘，走专科批次。专业系数 k = 0.8。` };
   }
   if (eff < line) {
     const fb = bestReachableMajor(eff, line1);
-    return { major: fb, tier: '本科（调剂）', k: 1.0, note: `总分 ${eff}，第一志愿参考线 ${line}，差 ${line - eff} 分：调剂到 ${fb}。专业系数 k = 1.0（坚持的加成没了）。` };
+    return { major: fb, tier: '本科（调剂）', k: stanceK, adjusted: true, note: `总分 ${eff}，第一志愿参考线 ${line}，差 ${line - eff} 分：调剂到 ${fb}。专业系数 k 不变（${stanceK}），压力 +8——不是你想要的专业，读起来会别扭。以后可以转专业。` };
   }
-  return { major: intendedMajor, tier: '本科', k: stanceK, note: '' };
+  return { major: intendedMajor, tier: '本科', k: stanceK, adjusted: false, note: '' };
 }
 
 const REWARD_NAMES = { money: '钱', skill: '专业', express: '表达', network: '人脉', influence: '影响力', health: '健康' };

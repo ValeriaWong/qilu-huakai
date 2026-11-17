@@ -27,6 +27,103 @@ function settlementYear(examYear) { return examYear + 17; } // T18 = 35 岁
 function t9Year(examYear) { return examYear + 8; } // T9 = 26 岁
 function isHistoryPack(birthYear) { return birthYear <= ERA_HISTORY_PACK_MAX; }
 
+// ---- P1 (a): T9 crisis background (design v6 §时间线) ----
+// crisisYear = examYear + 8. The five anchors are the named crises; any
+// other exam year gets a generic crisis — '行业调整' while the crisis
+// year is still real history (<= 2026), a fictional one after that.
+// The crisis sets the BACKGROUND (shown on the slice) and, via the
+// correction factors below, the H2 probability — it never re-rolls H2
+// and never picks a different story branch by itself.
+const T9_CRISIS_ANCHORS = [
+  { exam: 1988, id: 'layoff-wave', label: '下岗潮', fictional: false },
+  { exam: 2008, id: 'supply-side', label: '供给侧改革', fictional: false },
+  { exam: 2013, id: 'double-reduction', label: '双减', fictional: false },
+  { exam: 2019, id: 'fictional-2027', label: '架空情景', fictional: true },
+  { exam: 2026, id: 'fictional-2034', label: '架空情景', fictional: true },
+];
+function t9CrisisForExamYear(examYear) {
+  const crisisYear = examYear + 8;
+  const anchor = T9_CRISIS_ANCHORS.find((a) => a.exam === examYear);
+  if (anchor) return { id: anchor.id, label: anchor.label, crisisYear, examYear, fictional: anchor.fictional };
+  if (crisisYear <= 2026) return { id: 'industry-adjustment', label: '行业调整', crisisYear, examYear, fictional: false };
+  return { id: 'fictional-generic', label: '架空情景', crisisYear, examYear, fictional: true };
+}
+// ---- P1 (a): H2 layoff chance (ChatGPT recheck 2026-11-17, P0) ----
+// The multiplicative correction factors (+15%/+20%/+5%) were REJECTED:
+// no statistical basis, and relative-vs-percentage-point was undefined.
+// New method — STRUCTURE FIRST. The formula is fixed; every number lives
+// in a named constant table below so Allen can change the method without
+// touching the functions:
+//   P(H2) = clamp(5%, 85%, 20% + 15% x score + Y + I)
+// score = 0-4 risk-factor hits (see engine.js layoffChance).
+// Y = macro correction for the crisis year, in percentage points.
+// I = industry correction for the crisis year + the player's industry,
+// in percentage points. Y and I are GAME-BALANCE parameters, not
+// unemployment-rate conversions. They apply ONLY to the H2 layoff
+// determination, never to the other T9 crisis branches (startup /
+// freelance / student / unemployed each have their own branch).
+const T9_H2_BASE = 20;
+const T9_H2_PER_RISK = 15;
+const T9_H2_MIN = 5;
+const T9_H2_MAX = 85;
+// Macro correction Y by crisis year (pp). 2022 is the only year with a
+// positive correction: the year's macro pressure was the highest of the
+// three (surveyed urban unemployment 5.6% vs 5.1% in 2021 and 5.2% in
+// 2023). 2021 does not support a blanket +15pp (employment was broadly
+// stable); 2023 uses a new (ex-student) statistical口径 and cannot be
+// directly compared with the two earlier years.
+const T9_YEAR_ADJUSTMENT = { 2021: 0, 2022: 3, 2023: 0 };
+// Industry correction I by crisis year + industry (pp). Keys use the
+// game's industry strings (see T5_JOBS / era-events conds); '互联网平台'
+// is accepted as an alias of '互联网'.
+// OPEN (2023 教培）: the recheck says "+5pp for 互联网/部分教培" — WHICH
+// 教培 counts as "部分" is unresolved; the table currently applies +5 to
+// 教培 as a whole. Pending Allen's call.
+// NOTE (reachability): the game's current T5 jobs only produce
+// 互联网/体制内/本地服务/创业公司 as jobIndustry, so the 教培/线下服务
+// rows are unreachable until the job/industry vocabulary is aligned.
+const T9_INDUSTRY_ADJUSTMENT = {
+  2021: { '互联网': 5, '教培': 8 },
+  2022: { '互联网': 5, '线下服务': 8, '教培': 8 },
+  2023: { '互联网': 5, '教培': 5 },
+};
+function t9YearAdjustment(crisisYear) { return T9_YEAR_ADJUSTMENT[crisisYear] || 0; }
+function t9IndustryAdjustment(crisisYear, industry) {
+  if (!industry) return 0;
+  const row = T9_INDUSTRY_ADJUSTMENT[crisisYear];
+  if (!row) return 0;
+  if (Object.prototype.hasOwnProperty.call(row, industry)) return row[industry];
+  if (industry === '互联网平台') return row['互联网'] || 0;
+  return 0;
+}
+// The H2 chance for one player: score (0-4), crisis year, industry.
+// Pure; the tables above are the only inputs besides the arguments.
+function t9H2Chance(score, crisisYear, industry) {
+  const raw = T9_H2_BASE + T9_H2_PER_RISK * score + t9YearAdjustment(crisisYear) + t9IndustryAdjustment(crisisYear, industry);
+  return Math.max(T9_H2_MIN, Math.min(T9_H2_MAX, raw));
+}
+// Which crisis branch the player is on at T9. The H2 die (sealed when
+// the slice is entered) decides laid-off vs kept; the branch only shapes
+// the aftermath. Grad-school and startup paths get their own branch.
+// NOTE: flags.gradSchool has no UI source yet (T5 offers no 读研 option)
+// — the branch exists and is tested, but is currently unreachable in play.
+function t9Branch(state) {
+  const flags = state.flags || {};
+  if (flags.gradSchool) return 'grad';
+  const hasVenture = (state.ventures || []).some((v) => v.status === 'active' || v.status === 'validating' || v.status === 'running');
+  if (flags.employment === 'startup' || hasVenture) return 'startup';
+  const h2 = flags.h2;
+  if (h2 && h2.laidOff) return 'laid-off';
+  const hr = state.decisions && state.decisions['hr-talk'];
+  if (hr && hr.text.includes('转岗')) return 'transfer';
+  if (flags.industryDown) return 'restructure';
+  return 'pivot';
+}
+const T9_BRANCH_LABEL = {
+  'laid-off': '被裁', transfer: '岗位协商', restructure: '组织调整',
+  pivot: '转型', startup: '创业危机', grad: '读研危机',
+};
+
 // ---- exam system by province + year (v6.1 switching points) ----
 // 'split' = 文理分科; '3+3' = 山东 2020+; '3+1+2' = 辽宁 2021+, 吉林/黑龙江 2024+.
 function getExamMode(province, year) {
@@ -108,28 +205,97 @@ function admissionTiers(row) {
   return tiers;
 }
 
-// v0.6 era admission. Returns { major, tier, k, note }.
+// v0.6 era admission. Returns { major, tier, k, note, adjusted }.
 // k comes from the tier, never from the stance (v6: stance moves the
 // family line, the tier sets the study environment). No per-major
-// reference line exists anymore (the fixed-offset formula is deleted);
-// 调剂 as its own mechanism needs the school-tier + major-demand model
-// (P1) and is not faked here.
+// reference line exists anymore (the fixed-offset formula is deleted).
+// P1 (e): tier and major are split. The tier is set by the score alone;
+// the major is matched inside the tier by demand (see
+// ERA_MAJOR_DEMAND): if the score is short of the major's premium, the
+// player is 调剂 to the best reachable major in the SAME tier — k does
+// not drop, stress +8 and the 转专业 action unlock (applied by the
+// caller, game.js pickT1). The parents' pick (省内师范) is never 调剂.
 // Below every line -> 落榜: k = 1.00 temporary, three-way fallback
-// (复读 / 专科补录 / 先工作) is chosen on the signed card.
+// (复读 / 专科补录 / 先工作) is chosen on the signed card, plus the
+// P1 落榜调剂校外 option (offCampusFallback: one rung down, k −0.15).
 function resolveEraAdmission(state, intendedMajor) {
   const g = (state.flags && state.flags.gaokao) || {};
   const row = g.row || {};
   const eff = g.base || 0;
   const tiers = admissionTiers(row);
+  // Merged / single-line 本科： no 一本线 exists, so the school tier
+  // inside 本科 is simulated from the score (P1-e).
+  const sim = simulateSchoolTier(row, eff);
+  if (sim) {
+    const m = resolveMajorInTier(eff, row.tier2, intendedMajor);
+    return { major: m.major, tier: sim.name, k: sim.k, note: m.note, adjusted: m.adjusted };
+  }
   for (const t of tiers) {
     if (eff >= t.line) {
-      return { major: intendedMajor, tier: t.name, k: t.k, note: '' };
+      const m = resolveMajorInTier(eff, t.line, intendedMajor);
+      return { major: m.major, tier: t.name, k: t.k, note: m.note, adjusted: m.adjusted };
     }
   }
   return {
-    major: intendedMajor, tier: '落榜', k: 1.0,
+    major: intendedMajor, tier: '落榜', k: 1.0, adjusted: false,
     note: `总分 ${eff}，没够上任何一条线：先选一条路——复读一年、等专科补录、或先工作一年。专业系数 k = 1.0（暂定）。`,
   };
+}
+
+// ---- P1 (e): major-demand premiums + school-tier simulation ----
+// Demand premiums (GAME ESTIMATE, not real admission data): how far above
+// the tier line a score must be to land the intended major inside the
+// tier. The premium only decides major vs 调剂， never admission itself.
+// (WorkBuddy's 年代系数表 is the reference — e.g. 土木 was hot in 2012
+// and cold by 2020 — but this table is static for now; era variation of
+// demand is a refinement, not faked per year here.)
+const ERA_MAJOR_DEMAND = {
+  '临床医学': 100, '计算机': 80, '金融': 60, '法学': 50, '会计': 40,
+  '新闻传播': 30, '师范': 20, '土木': 10, '英语': 10, '艺术设计': 0,
+};
+const ERA_MAJOR_DEMAND_DEFAULT = 30;
+function demandPremiumForMajor(major) {
+  return Object.prototype.hasOwnProperty.call(ERA_MAJOR_DEMAND, major)
+    ? ERA_MAJOR_DEMAND[major] : ERA_MAJOR_DEMAND_DEFAULT;
+}
+// Highest-demand major the score can still land inside this tier.
+function bestReachableMajorInTier(score, tierLine) {
+  let best = '艺术设计', bestPremium = 0;
+  for (const [name, premium] of Object.entries(ERA_MAJOR_DEMAND)) {
+    if (tierLine + premium <= score && premium > bestPremium) { best = name; bestPremium = premium; }
+  }
+  return best;
+}
+// Match the intended major inside one tier. Returns { major, adjusted, note }.
+function resolveMajorInTier(score, tierLine, intendedMajor) {
+  if (intendedMajor === '省内师范') return { major: intendedMajor, adjusted: false, note: '' };
+  const premium = demandPremiumForMajor(intendedMajor);
+  if (score >= tierLine + premium) return { major: intendedMajor, adjusted: false, note: '' };
+  const fb = bestReachableMajorInTier(score, tierLine);
+  return {
+    major: fb, adjusted: true,
+    note: `总分 ${score}，${intendedMajor}要 ${tierLine + premium} 分才够，差 ${tierLine + premium - score} 分：调剂到${fb}。专业系数 k 不变，压力 +8——不是你想要的专业，读起来会别扭。以后可以转专业。`,
+  };
+}
+// Merged / single-line 本科 (regime merged / new33 / 3+1+2 single line):
+// there is no 一本线, so the school tier inside 本科 is simulated from
+// the score — >= 本科线 +100 -> 高资源本科 (k 1.30), otherwise 普通本科
+// (k 1.10). Split years keep their real 一本/二本 tiers (returns null).
+// The +100 is a game rule, not a real admission fact.
+function simulateSchoolTier(row, score) {
+  if (!row || typeof row.tier2 !== 'number') return null;
+  if (typeof row.tier1 === 'number') return null;
+  if (score < row.tier2) return null;
+  return score >= row.tier2 + 100
+    ? { name: '高资源本科', k: 1.30 }
+    : { name: '本科', k: 1.10 };
+}
+// 落榜调剂校外： one rung below the lowest tier in the row, k −0.15.
+function offCampusFallback(row) {
+  const tiers = admissionTiers(row);
+  if (!tiers.length) return { tier: '校外专科', k: 0.65 };
+  const lowest = tiers[tiers.length - 1];
+  return { tier: '校外' + lowest.name, k: Math.round((lowest.k - 0.15) * 100) / 100 };
 }
 
 // ---- v0.7 家庭经济 + 大事记 (design v6 §家庭经济 / §大事记) ----
@@ -328,6 +494,9 @@ function applyEraForTurn(state, rng, turn) {
   const era = flags.era;
   if (!era) return [];
   const year = calendarYearForTurn(era.examYear, turn);
+  // P1 (c): past 2026 there is no verified history — the year is
+  // generated, not looked up (see futureScenarioForYear).
+  if (year > 2026) return applyFutureForTurn(state, year, turn);
   const age = ageForTurn(turn);
   const ctx = eraCtx(state);
   const rolls = flags.eraRolls || (flags.eraRolls = {});
@@ -337,6 +506,106 @@ function applyEraForTurn(state, rng, turn) {
     if (e) applied.push(e);
   }
   return applied;
+}
+
+// ---- P1 (c): future scenario generator (2027+) ----
+// 2027–2030: only the 3 settled trends, one sentence per trend per year.
+// No company names, no policy names, no amounts — the trends are
+// structural, not news.
+const FUTURE_TRENDS = [
+  { id: 'ai-jobs', label: 'AI 替代白领初级岗', lines: {
+    2027: '越来越多基础文案、表格和客服类的初级岗位开始由 AI 先过一遍，人只负责最后把关。',
+    2028: '初级岗的招聘要求里开始出现“会用 AI 工具”这一条，不会用的简历先被筛掉一轮。',
+    2029: '有些公司的初级岗不再招新人，空出来的活分给 AI 和老员工，毕业生得从更边缘的活干起。',
+    2030: '白领初级岗的门槛变了：拼的不再是会不会做，而是会不会指挥 AI 做。',
+  } },
+  { id: 'housing-down', label: '房地产长期下行', lines: {
+    2027: '房价还在往下走，买房的人越来越少，观望的人越来越多。',
+    2028: '二手房挂牌越来越多，成交周期越来越长，降价成了常态。',
+    2029: '房企的债务和烂尾还在消化，买房的决策周期拉得更长。',
+    2030: '房子回归居住属性的说法越来越多，但没人说得清底部在哪里。',
+  } },
+  { id: 'civil-hot', label: '考公考编热', lines: {
+    2027: '考公考编的人数又创新高，考场外的培训班和资料摊比往年更热闹。',
+    2028: '体制内岗位的竞争比继续拉大，有人考了几年还在考。',
+    2029: '考公热从应届蔓延到在职，“上岸”成了朋友圈里最常见的词。',
+    2030: '考公考编热还没退，但越来越多的人开始算这笔账：值得为它耗几年。',
+  } },
+];
+function futureTrendsForYear(year) {
+  if (year < 2027 || year > 2030) return [];
+  return FUTURE_TRENDS.map((t) => ({ trend: t.id, label: t.label, text: t.lines[year], fictional: true }));
+}
+// "无大事年" fallback: one environment line + one family-internal event.
+const QUIET_ENV_LINES = [
+  '这一年没有大事发生，日子按部就班地过。',
+  '这一年风平浪静，新闻里的大事都离你很远。',
+  '这一年没什么可记的，时间就这么过去了。',
+];
+const QUIET_FAMILY_LINES = {
+  model: '妈妈开始在电话里念叨：什么时候回家吃顿饭。',
+  absentFather: '爸爸难得打来一个电话，问你最近身体怎么样。',
+  absentMother: '妈妈寄来一箱家乡的特产，里面夹了一张手写的纸条。',
+  absentBoth: '奶奶打电话来，说她最近身体还好，让你不用惦记。',
+  orphan: '福利院的李阿姨给你发了一条消息，问你最近好不好。',
+  npd: '家里又因为一件小事吵了一架，你在电话这头听完了全程。',
+};
+function quietYearScenario(state, year) {
+  const familyKey = state.origin ? state.origin.familyKey : 'model';
+  return {
+    type: 'quiet', fictional: true,
+    env: QUIET_ENV_LINES[year % QUIET_ENV_LINES.length],
+    family: QUIET_FAMILY_LINES[familyKey] || QUIET_FAMILY_LINES.model,
+  };
+}
+// 2031+: a fictional scenario fires ONLY when something in the player's
+// own state triggers it (industry down, a live venture, a commitment due
+// this turn, or family support too thin to catch them). No trigger ->
+// the quiet-year template. Nothing here invents a real policy: the
+// frames are generic industry/family language, marked fictional: true.
+function generateFictionalScenario(state, year) {
+  const flags = state.flags || {};
+  if (flags.industryDown) return { type: 'scenario', id: 'industry-shakeout', label: '行业重组', fictional: true, text: '你所在的行业又一轮调整：岗位和业务线都在重新洗牌，变化先从公司内部开始，还没变成新闻里的说法。' };
+  const hasVenture = (state.ventures || []).some((v) => v.status === 'active' || v.status === 'validating' || v.status === 'running');
+  if (hasVenture) return { type: 'scenario', id: 'venture-headwind', label: '创业逆风', fictional: true, text: '你那条自己开的线撞上了市场变化：获客变难了，账要重新算。' };
+  const due = Object.values(state.commitments || {}).some((c) => c.dueTurn === state.turn);
+  if (due) return { type: 'scenario', id: 'commitment-due', label: '承诺兑现年', fictional: true, text: '这一年轮到你几年前签下的承诺兑现：当时写下的那句话，现在要拿出来对照。' };
+  const econ = flags.familyEcon;
+  if (econ && supportCash(econ, state.origin ? state.origin.familyKey : null) < 2) return { type: 'scenario', id: 'family-strain', label: '家里吃紧', fictional: true, text: '家里的经济状况吃紧，这一年的大事不是外面的世界，是家里的账本。' };
+  return quietYearScenario(state, year);
+}
+function futureScenarioForYear(state, year) {
+  if (year >= 2027 && year <= 2030) return { type: 'trends', lines: futureTrendsForYear(year), fictional: true };
+  if (year >= 2031) return generateFictionalScenario(state, year);
+  return null;
+}
+// Future years land in the same eraLog the year screen reads (idempotent
+// per year, like the history path). Fictional entries carry fictional:
+// true and a （未来推演·虚构） marker in the text.
+function applyFutureForTurn(state, year, turn) {
+  const flags = state.flags || (state.flags = {});
+  flags.eraApplied = flags.eraApplied || {};
+  const key = 'future|' + year;
+  if (flags.eraApplied[key]) return [];
+  flags.eraApplied[key] = true;
+  const sc = futureScenarioForYear(state, year);
+  if (!sc) return [];
+  const entries = [];
+  const push = (event, label, text) => {
+    const e = { turn, year, event, tier: 'signal', text: year + ' 年 ' + label + '：' + text + '（未来推演·虚构）', fictional: true };
+    state.eraLog = state.eraLog || [];
+    state.eraLog.push(e);
+    entries.push(e);
+  };
+  if (sc.type === 'trends') {
+    for (const line of sc.lines) push(line.trend, line.label, line.text);
+  } else if (sc.type === 'scenario') {
+    push(sc.id, sc.label, sc.text);
+  } else {
+    push('quiet-env', '无大事年', sc.env);
+    push('quiet-family', '家里', sc.family);
+  }
+  return entries;
 }
 function eraCtx(state) {
   const flags = state.flags || {};
@@ -358,6 +627,189 @@ function eraLogForTurn(state, turn) {
   return (state.eraLog || []).filter((e) => e.turn === turn);
 }
 
+// ---- P1 (d): H0 tamper conditions (design v6 §H0 与志愿篡改) ----
+// H0 stays the birth-family intervention tendency (an initial parameter
+// only). Tampering needs ALL of: a strong H0 (>= 60), a parent who
+// actually holds the account, a system that allows it, and no
+// self-confirmation by the player yet. The remedy window is the T1 pick
+// itself: picking anything confirms the player's own填报 and ends the
+// tamper (game.js sets flags.t1Confirmed on pick).
+// Account access by family structure: a present parent holds it; a
+// grandparent guardian (absentBoth) or no parent at all (orphan) does not.
+// System by year: before 2013填报 was largely onsite (school computer
+// room / paper forms) — a parent could only change it by showing up in
+// person. From 2013 the online account is enough: whoever holds the
+// password can change it. (Game simplification; the exact provincial
+// switch year varies. 2026 UI logic is never applied to 2010 as-is.)
+const H0_ACCOUNT_ACCESS = { model: true, absentFather: true, absentMother: true, absentBoth: false, orphan: false, npd: true };
+function h0SystemForYear(examYear) {
+  return examYear < 2013 ? 'onsite' : 'online';
+}
+function h0TamperFactors(state) {
+  const h0 = (state.sealed && state.sealed.H0) || null;
+  const familyKey = state.origin ? state.origin.familyKey : null;
+  const examYear = (state.flags && state.flags.era && state.flags.era.examYear) || 2026;
+  return {
+    h0: h0 ? h0.value : 0,
+    parentsHaveAccount: H0_ACCOUNT_ACCESS[familyKey] === true,
+    system: h0SystemForYear(examYear),
+    playerConfirmed: !!(state.flags && state.flags.t1Confirmed),
+    remedyAvailable: true,
+  };
+}
+function isH0Tampered(state) {
+  const f = h0TamperFactors(state);
+  return f.h0 >= 60 && f.parentsHaveAccount && !f.playerConfirmed;
+}
+
+// Unified era context (recheck general opinion): every era lookup reads
+// the SAME calendar year + cohort state, so a 2015-cohort player in 2023
+// uses 2023's environment, not 2015's. Fields: examYear (cohort),
+// calendarYear (the year being played), turn, age, industry (the
+// player's job industry, if any), gradYear (examYear + 4 — the year the
+// player actually makes the 考公 / job-market decision), crisisYear
+// (examYear + 8 — the T9 year).
+function eraContextFor(state, turn) {
+  const era = (state.flags && state.flags.era) || null;
+  const examYear = era ? era.examYear : 2026;
+  return {
+    examYear,
+    calendarYear: calendarYearForTurn(examYear, turn),
+    turn,
+    age: ageForTurn(turn),
+    industry: (state.flags && state.flags.jobIndustry) || null,
+    gradYear: examYear + 4,
+    crisisYear: examYear + 8,
+  };
+}
+
+// ---- P1 (f): civil-service / NPC contact / foreign firms ----
+// (ChatGPT recheck 2026-11-17. STRUCTURE FIRST: every number below lives
+// in a named constant table so Allen can change the method without
+// touching the functions. The design doc's numbers are NOT used here —
+// the recheck corrected or rejected them. All lookups take the DECISION
+// / calendar year — the graduation year for 考公 and foreign firms —
+// never the exam year alone.)
+// --- 考公： verified series. Fields per anchor year: applicants = 通过
+// 资格审查 (万人）, planned = 计划招录 (人）, ratio = 审查人数/招录比
+// (:1), actual = 实际参考 (万人）, actualRatio = 实际竞争比 (:1).
+// Anchors only (2010, 2023). Between them the values are LINEAR
+// INTERPOLATION, flagged interpolated: true — not measured data. Outside
+// the anchor range the function returns null (no extrapolation, no
+// silent clamping to an anchor year).
+// Note the recheck's warning: 报名涨不等于单岗竞争同比例涨 — 招录也在
+// 扩 (15,526 -> 37,100), so the ratio, not the raw applicant count, is
+// the competition signal.
+const CIVIL_SERVICE_SERIES = {
+  2010: { applicants: 144.3, planned: 15526, ratio: 93, actual: 92.7, actualRatio: 60 },
+  2023: { applicants: 259.77, planned: 37100, ratio: 70, actual: 152.5, actualRatio: 41 },
+};
+function civilServiceStats(year) {
+  const years = Object.keys(CIVIL_SERVICE_SERIES).map(Number).sort((a, b) => a - b);
+  const lo = years[0], hi = years[years.length - 1];
+  if (year < lo || year > hi) return null;
+  const a = CIVIL_SERVICE_SERIES[lo], b = CIVIL_SERVICE_SERIES[hi];
+  if (year === lo) return { year: lo, ...a, interpolated: false };
+  if (year === hi) return { year: hi, ...b, interpolated: false };
+  const t = (year - lo) / (hi - lo);
+  const mix = (x, y) => Math.round((x + (y - x) * t) * 10) / 10;
+  return {
+    year,
+    applicants: mix(a.applicants, b.applicants),
+    planned: Math.round(a.planned + (b.planned - a.planned) * t),
+    ratio: mix(a.ratio, b.ratio),
+    actual: mix(a.actual, b.actual),
+    actualRatio: mix(a.actualRatio, b.actualRatio),
+    interpolated: true,
+  };
+}
+// 考公吸引力权重 (0-100, NOT a measured probability) by decision year.
+// Non-monotonic by design (2024-2026 dips to 72 after 75). Outside the
+// table the function returns null (2027+ is fictional — no band).
+const CIVIL_SERVICE_APPEAL_BANDS = [
+  { from: 2010, to: 2013, appeal: 55 },
+  { from: 2014, to: 2016, appeal: 58 },
+  { from: 2017, to: 2019, appeal: 62 },
+  { from: 2020, to: 2021, appeal: 68 },
+  { from: 2022, to: 2023, appeal: 75 },
+  { from: 2024, to: 2026, appeal: 72 },
+];
+function civilServiceAppeal(decisionYear) {
+  const band = CIVIL_SERVICE_APPEAL_BANDS.find((b) => decisionYear >= b.from && decisionYear <= b.to);
+  return band ? band.appeal : null;
+}
+// The 0-1 weight form of the appeal (for any mechanical use). Null
+// outside the table, same as civilServiceAppeal.
+function civilServiceWeight(decisionYear) {
+  const appeal = civilServiceAppeal(decisionYear);
+  return appeal === null ? null : appeal / 100;
+}
+// The narrative replaces the REJECTED "2010 被嘲退路 / 2020 最优解"
+// one-way story (2010 was already ~93:1 with stability and family
+// approval; a 2020 届 student graduates in 2024, not 2020). Two bands,
+// the recheck's wording. Null outside the table.
+const CIVIL_SERVICE_NARRATIVES = [
+  { from: 2010, to: 2019, text: '2010 年代中期考公已有较强竞争，但市场化路线亦强。' },
+  { from: 2020, to: 2026, text: '2020 年代初因毕业生规模扩大、部分行业收缩，考公成为更多人眼中重要的稳定选择。' },
+];
+function civilServiceNarrative(decisionYear) {
+  const band = CIVIL_SERVICE_NARRATIVES.find((b) => decisionYear >= b.from && decisionYear <= b.to);
+  return band ? band.text : null;
+}
+// --- NPC 联系方式： multi-channel coexistence, primacy shifts. ---
+// Each band lists the channels in primacy order (first = primary).
+// 微信 was NOT the default in 2011 (launched Jan 2011, >200M registered
+// users only Sep 2012); QQ still dominated 2010-2011 (~79.4% usage Jun
+// 2011). 人人网 stayed active 2011-2013; 微博 had 309M users by end
+// 2012. 短信 is never deleted after 2013 (still used for notices and
+// verification). 抖音 is a content channel (launched Sep 2016, popular
+// after 2017) — no 抖音 DM / live-commerce in 2015.
+const NPC_CONTACT_PERIODS = [
+  { from: 2000, to: 2005, channels: ['QQ', '短信', '电话', '邮件', '论坛'] },
+  { from: 2006, to: 2010, channels: ['QQ', 'QQ空间', '人人', '博客', '短信', '电话', '邮件'] },
+  { from: 2011, to: 2012, channels: ['QQ', '短信', '电话', '微博', '早期微信', '人人'] },
+  { from: 2013, to: 2014, channels: ['微信', 'QQ', '短信', '电话', '微博', '邮件'] },
+  { from: 2015, to: 2016, channels: ['微信', 'QQ', '短信', '电话', '微博', '邮件', '陌陌', '钉钉', '脉脉'] },
+  { from: 2017, to: 2019, channels: ['微信', 'QQ', '短信', '电话', '微博', '邮件', '陌陌', '钉钉', '脉脉', '企业微信', '抖音'] },
+  { from: 2020, to: 2026, channels: ['微信', 'QQ', '短信', '电话', '微博', '邮件', '陌陌', '钉钉', '脉脉', '企业微信', '抖音', '飞书', '小红书'] },
+];
+function npcContactForYear(year) {
+  const band = NPC_CONTACT_PERIODS.find((b) => year >= b.from && year <= b.to);
+  if (band) return band.channels.slice();
+  if (year < NPC_CONTACT_PERIODS[0].from) return NPC_CONTACT_PERIODS[0].channels.slice();
+  return NPC_CONTACT_PERIODS[NPC_CONTACT_PERIODS.length - 1].channels.slice();
+}
+// The instant-messaging channel a "probe" message would use that year —
+// for the slice's "先发微信探探口风" option. Before 2013 微信 is not the
+// default (see above), so the probe goes by QQ.
+function npcInstantChannel(year) {
+  return year < 2013 ? 'QQ消息' : '微信';
+}
+// --- 外企线： opportunity visibility weight by labour-market entry year
+// (graduation year = examYear + 4), NOT the exam year. The recheck
+// REJECTED "2015 强 / 2018 后改出海线": 2015 is not the end of the
+// P&G / Big4 / consulting window, and 出海 is a parallel route for
+// Chinese firms — not a replacement for foreign firms' China jobs
+// (local posts, regional HQ, R&D / manufacturing / finance / supply
+// chain / compliance). 2018+ is "分化为主，伴随局部收缩和转型".
+// Differentiation by city / major / language / industry / player
+// initiative is later work, not faked here.
+// Returns { weight, fictional } — 2027+ is fictional (no band).
+const FOREIGN_FIRM_VISIBILITY_BANDS = [
+  { from: 2010, to: 2013, weight: 80 },
+  { from: 2014, to: 2017, weight: 90 },
+  { from: 2018, to: 2020, weight: 80 },
+  { from: 2021, to: 2022, weight: 70 },
+  { from: 2023, to: 2024, weight: 75 },
+  { from: 2025, to: 2026, weight: 75 },
+];
+function foreignFirmVisibility(entryYear) {
+  const band = FOREIGN_FIRM_VISIBILITY_BANDS.find((b) => entryYear >= b.from && entryYear <= b.to);
+  if (band) return { weight: band.weight, fictional: false };
+  if (entryYear < FOREIGN_FIRM_VISIBILITY_BANDS[0].from) return { weight: FOREIGN_FIRM_VISIBILITY_BANDS[0].weight, fictional: false };
+  return { weight: null, fictional: true };
+}
+
 if (typeof module !== 'undefined') {
   module.exports = {
     ERA_BIRTH_MIN, ERA_BIRTH_MAX, ERA_BIRTH_HIGHLIGHT_MIN, ERA_BIRTH_HIGHLIGHT_MAX,
@@ -369,5 +821,21 @@ if (typeof module !== 'undefined') {
     rollFamilyEcon, rollFamilyBg, supportCash, supportFactor, familySafetyText,
     eraEventKey, eventApplies, eventsForYear, applyEraEvent, applyEraHistory,
     applyEraForTurn, eraCtx, eraLogForTurn,
+    T9_CRISIS_ANCHORS, t9CrisisForExamYear,
+    T9_H2_BASE, T9_H2_PER_RISK, T9_H2_MIN, T9_H2_MAX,
+    T9_YEAR_ADJUSTMENT, T9_INDUSTRY_ADJUSTMENT,
+    t9YearAdjustment, t9IndustryAdjustment, t9H2Chance,
+    t9Branch, T9_BRANCH_LABEL,
+    FUTURE_TRENDS, futureTrendsForYear, quietYearScenario, generateFictionalScenario,
+    futureScenarioForYear, applyFutureForTurn,
+    H0_ACCOUNT_ACCESS, h0SystemForYear, h0TamperFactors, isH0Tampered,
+    ERA_MAJOR_DEMAND, ERA_MAJOR_DEMAND_DEFAULT, demandPremiumForMajor,
+    bestReachableMajorInTier, resolveMajorInTier, simulateSchoolTier, offCampusFallback,
+    eraContextFor,
+    CIVIL_SERVICE_SERIES, civilServiceStats,
+    CIVIL_SERVICE_APPEAL_BANDS, civilServiceAppeal, civilServiceWeight,
+    CIVIL_SERVICE_NARRATIVES, civilServiceNarrative,
+    NPC_CONTACT_PERIODS, npcContactForYear, npcInstantChannel,
+    FOREIGN_FIRM_VISIBILITY_BANDS, foreignFirmVisibility,
   };
 }

@@ -496,7 +496,9 @@ function screenT1() {
   // rolled when the region is picked (region-relative, see pickT1Region).
   if (!s.flags.gaokao) { screenT1Region(); return; }
   const h0 = s.sealed.H0;
-  const tampered = h0 && h0.value >= 60;
+  // P1 (d): H0 alone never decides tampering — see isH0Tampered (era.js).
+  const tampered = isH0Tampered(s);
+  const tamperFactors = tampered ? h0TamperFactors(s) : null;
   const g = s.flags.gaokao;
   // v0.7: this year's era events resolve when the T1 screen first
   // renders (idempotent — re-renders from the diagnosis toggle apply
@@ -537,7 +539,7 @@ function screenT1() {
     <div class="card">
       <p><b>家庭兜底：</b>${esc(s.flags.familySafety || '')}</p>
       <p><b>征兆：</b>${h0 ? h0.omens.map((o) => esc(o.text)).join(' ') : ''}</p>
-      ${tampered ? `<p class="warn">这颗骰在你出生那年掷出：父母干预强度 ${h0.value}。第一志愿已经被改成了省内师范。</p>` : `<p>父母干预强度 ${h0 ? h0.value : '?'}，这一次，他们让你自己填。</p>`}
+      ${tampered ? `<p class="warn">这颗骰在你出生那年掷出：父母干预强度 ${h0.value}。${tamperFactors.system === 'online' ? '网上填报，账号密码在父母手里，' : '那年是现场填报，你爸去学校机房，'}第一志愿已经被改成了省内师范。截止前你还能自己改回来——坚持自己或谈判，就是改回来；听父母的，就是认了。</p>` : `<p>父母干预强度 ${h0 ? h0.value : '?'}，这一次，他们让你自己填。</p>`}
     </div>
     ${eraYearCardHtml(s, 1)}
     <h2>你想报的专业</h2>
@@ -637,6 +639,9 @@ function t1DiagnosisHtml() {
 
 function pickT1(choice) {
   const s = G.state, a = s.attrs;
+  // P1 (d): any pick is the player confirming their own填报 — the remedy
+  // window for an H0 tamper closes here.
+  s.flags.t1Confirmed = true;
   const wanted = ($('#t1-major') ? $('#t1-major').value : '').trim().slice(0, 20);
   const stanceK = { obey: 1.0, insist: 1.3, negotiate: 1.0 }[choice];
   const stance = { obey: '听父母的', insist: '坚持自己', negotiate: '谈判折中' }[choice];
@@ -652,6 +657,13 @@ function pickT1(choice) {
   // v0.6: era runs resolve by tier (resolveEraAdmission); legacy runs
   // keep the 2026 per-major resolver.
   const adm = (s.flags.gaokao && s.flags.gaokao.era) ? resolveEraAdmission(s, intended) : resolveAdmission(s, intended, stanceK);
+  // P1 (e): 调剂 costs stress +8 and unlocks the 转专业 action; k is
+  // already untouched by the resolver (both legacy and era).
+  if (adm.adjusted) {
+    a.stress += 8;
+    s.flags.adjusted = true;
+    s.flags.adjustedFrom = intended;
+  }
   if (choice === 'obey') { a.family += 1; s.flags.obsessionProgress = (s.flags.obsessionProgress || 0) - 1; }
   if (choice === 'insist') {
     a.family -= 1;
@@ -665,7 +677,7 @@ function pickT1(choice) {
   s.flags.majorK = adm.k;
   // v0.7: degree bonus from the era tier (一本 +0.5 / 三本 −0.5 / 专科 −0.5).
   if (s.flags.gaokao && s.flags.gaokao.era) {
-    s.flags.degreeBonus = { '一本': 0.5, '三本': -0.5, '专科': -0.5 }[adm.tier] || 0;
+    s.flags.degreeBonus = { '一本': 0.5, '高资源本科': 0.5, '三本': -0.5, '专科': -0.5 }[adm.tier] || 0;
   }
   s.commitments.A = {
     text: '志愿：' + adm.major + '（' + stance + '，' + adm.tier + '）',
@@ -678,10 +690,11 @@ function pickT1(choice) {
     <h1>承诺卡 A 已签署</h1>
     <div class="card"><p>你的专业：<b>${esc(adm.major)}</b>（${stance} · ${adm.tier}）。专业系数 k = ${adm.k}，T2–T4 兑现，T5 回顾。骰子已封存，兑现时只读档、不重掷。</p>
     ${adm.note ? `<p>${esc(adm.note)}</p>` : ''}
+    ${adm.adjusted ? `<p>调剂：压力 +8。你可以以后转专业（T2–T4，1 AP，50% 成功）。</p>` : ''}
     ${s.flags.selfFunded ? `<p>${(s.flags.gaokao && s.flags.gaokao.era) ? '三本且家庭现金 < 8 万：自挣学费，T2–T5 每年 −1 AP。' : '家庭经济 ≤2 档：自挣学费，T2–T5 每年 −1 AP。'}</p>` : ''}
     <p class="muted">征兆已记下，兑现那天会拿出来对照：你当时收到过什么信号、忽略了什么。</p></div>
     ${adm.tier === '落榜'
-      ? `<div class="actions"><button class="primary" data-act="t1-fallback" data-id="repeat">复读一年</button><button data-act="t1-fallback" data-id="vocational">等专科补录</button><button data-act="t1-fallback" data-id="work">先工作一年</button></div>`
+      ? `<div class="actions"><button class="primary" data-act="t1-fallback" data-id="repeat">复读一年</button><button data-act="t1-fallback" data-id="vocational">等专科补录</button><button data-act="t1-fallback" data-id="work">先工作一年</button><button data-act="t1-fallback" data-id="offcampus">调剂校外（降一档，k −0.15）</button></div>`
       : `<div class="actions"><button class="primary" data-act="year-start">进入 T2 · 19 岁</button></div>`}`);
 }
 
@@ -729,6 +742,42 @@ function attemptShengben(s, rng, costAp) {
   }
   s.rngState = rng.getState();
   autosave(ok ? '专升本成功' : '专升本未过');
+  return true;
+}
+
+// ---------- P1 (e): 转专业 ----------
+// 调剂过的玩家，大学期间（T2–T4）可转回想读的专业。1 AP，50% 成功，
+// 一年一次；失败压力 +10，明年可再试。成功后读回原想读的专业，
+// 调剂标记清除（满意度回正）；失败只加压力，不动专业。
+function transferMajorEligible(s) {
+  return !!(s.flags.adjusted && s.turn >= 2 && s.turn <= 4);
+}
+function transferMajorHtml(s) {
+  if (!transferMajorEligible(s)) return '';
+  const tried = s.flags.transferYear === s.turn;
+  const last = s.flags.transferLast;
+  const result = last && last.turn === s.turn ? `<p>${esc(last.text)}</p>` : '';
+  return `<div class="card"><h2>转专业</h2>${result}<button class="opt" data-act="transfer-major" ${s.ap < 1 || tried ? 'disabled' : ''}><b>转回${esc(s.flags.adjustedFrom || '想读的专业')}</b><span>1 AP，50% 成功。今年一次机会，成功后读回你想读的专业；失败压力 +10。${tried ? '（今年已试过）' : ''}</span></button></div>`;
+}
+function attemptTransferMajor(s, rng) {
+  if (!transferMajorEligible(s)) return false;
+  if (s.flags.transferYear === s.turn) return false; // once per year
+  if (s.ap < 1) return false;
+  s.ap -= 1;
+  s.flags.transferYear = s.turn;
+  const ok = rng.int(1, 100) <= 50;
+  if (ok) {
+    const back = s.flags.adjustedFrom;
+    if (back && s.major) s.major.name = back;
+    s.flags.adjusted = false;
+    s.flags.adjustedFrom = undefined;
+    s.flags.transferLast = { turn: s.turn, ok: true, text: '转专业成功：读回了' + (back || '想读的专业') + '，这口气顺了。' };
+  } else {
+    s.attrs.stress += 10;
+    s.flags.transferLast = { turn: s.turn, ok: false, text: '转专业没批下来：名额满了，压力 +10。明年可以再试一次。' };
+  }
+  s.rngState = rng.getState();
+  autosave(ok ? '转专业成功' : '转专业未过');
   return true;
 }
 
@@ -805,7 +854,15 @@ function startYear(turn) {
   s.flags.eventChoice = ''; // reset: last year's choice must not leak into this year's brief
   // Independent scheduler: H3 industry cycle, H7 political wind, H9 accident.
   const rng = G.rng;
-  if (rng.chance(0.15) && !s.flags.industryDown) {
+  // v0.7: this year's era events (era runs only; idempotent — the
+  // guard lives in applyEraEvent, so re-renders apply nothing twice).
+  // P1 (a): they resolve FIRST — if a shock-tier macro event already
+  // set this year's environment, H3 does not add a second independent
+  // penalty (history sets the macro, H3 only fills the remaining
+  // industry uncertainty).
+  const eraApplied = applyEraForTurn(s, rng, turn);
+  const macroShock = eraApplied.some((e) => e.tier === 'shock');
+  if (!macroShock && rng.chance(0.15) && !s.flags.industryDown) {
     s.flags.industryDown = true;
     s.flags.industryDownYears = rng.int(2, 3);
     s.yearlyLog.push({ turn, type: 'h3', text: '行业进入下行：公司冻结招聘，老板开始算人头。' });
@@ -819,9 +876,6 @@ function startYear(turn) {
     s.yearlyLog.push({ turn, type: 'h9', text: good ? '意外之喜：一位贵人在行业群里转发了你的文章。影响力 +4。' : '意外：通勤路上被追尾，修车花掉 1 万，压力 +5。' });
     if (good) s.attrs.influence += 4; else { s.attrs.money -= 1; s.attrs.stress += 5; }
   }
-  // v0.7: this year's era events (era runs only; idempotent — the
-  // guard lives in applyEraEvent, so re-renders apply nothing twice).
-  applyEraForTurn(s, rng, turn);
   s.rngState = rng.getState();
   if (turn === 5) return screenT5();
   if (turn === 6) return screenT6();
@@ -842,6 +896,7 @@ function startYear(turn) {
     ${eventCardHtml(ev, s)}
     ${venturePanelHtml(s)}
     ${shengbenHtml(s, 'year')}
+    ${transferMajorHtml(s)}
     <h2>今年的行动（${s.ap} AP）</h2>
     <div class="options">${ventureActionHtml(s)}${ACTIONS.map((ac) => `<button class="opt" data-act="action" data-id="${ac.id}" ${s.ap < ac.ap ? 'disabled' : ''}><b>${ac.name}</b><span>${ac.desc}</span></button>`).join('')}</div>
     <div class="actions"><button class="primary" data-act="year-end">结束这一年 → 结算</button></div>`);
@@ -880,6 +935,7 @@ function startYearRefresh() {
     ${eventCardHtml(ev, s)}
     ${venturePanelHtml(s)}
     ${shengbenHtml(s, 'year')}
+    ${transferMajorHtml(s)}
     <h2>今年的行动（${s.ap} AP）</h2>
     <div class="options">${ventureActionHtml(s)}${ACTIONS.map((ac) => `<button class="opt" data-act="action" data-id="${ac.id}" ${s.ap < ac.ap ? 'disabled' : ''}><b>${ac.name}</b><span>${ac.desc}</span></button>`).join('')}</div>
     <div class="actions"><button class="primary" data-act="year-end">结束这一年 → 结算</button></div>`);
@@ -946,12 +1002,36 @@ function endYear() {
 }
 
 // ---------- T5 / T6 key years ----------
+// P1 (f): the graduation-year era line — how hot the civil-service exam
+// is this year, what the foreign-firm line looks like for this cohort,
+// and which channels the NPCs use. Display only for now (the 考公 /
+// 出海线 options themselves are later work); the numbers come from the
+// era functions, not from the 2026 UI.
+function t5EraLineHtml(s) {
+  // P1 (f, recheck 2026-11-17): everything keys off the graduation year
+  // (the year the player actually makes the decision), read through the
+  // unified era context — never the exam year alone.
+  const ec = eraContextFor(s, 5);
+  const gradYear = ec.gradYear;
+  const stats = civilServiceStats(gradYear);
+  const appeal = civilServiceAppeal(gradYear);
+  const narrative = civilServiceNarrative(gradYear);
+  const ff = foreignFirmVisibility(gradYear);
+  const contacts = npcContactForYear(gradYear);
+  const statsText = stats
+    ? `${gradYear} 年国考通过资格审查约 ${stats.applicants} 万人，计划招录 ${stats.planned} 人（审查比约 ${stats.ratio}:1${stats.interpolated ? '，插值估计' : ''}）`
+    : `${gradYear} 年国考数据未覆盖`;
+  const appealText = appeal === null ? '考公吸引力未定（架空年份）' : `考公吸引力 ${appeal}/100`;
+  const ffText = ff.fictional ? '外企机会可见度未定（架空年份）' : `外企机会可见度 ${ff.weight}/100（分化为主，伴随局部收缩和转型）`;
+  return `<div class="card"><p><b>时代：</b>${statsText}；${appealText}。${narrative || ''}${ffText}；联系人主要走${contacts.slice(0, 3).join('、')}等。</p></div>`;
+}
 function screenT5() {
   const s = G.state;
   setScreen(`
     <h1>T5 · 22 岁 · 毕业去向</h1>
     <p class="intro">承诺卡 A（志愿）已在 T4 兑现——回头看，18 岁的选择把你带到了这里。你的专业是 <b>${esc(s.major ? s.major.name : '（旧存档，未记录）')}</b>${s.major && s.major.tier ? `（${esc(s.major.tier)}）` : ''}，专业系数 k = ${s.flags.majorK}，起点已定。同时签下承诺卡 B：第一份工作，锁定城市 × 行业，后续 80% 的机会只从这条线长出来。</p>
     <div class="card"><p><b>offer 档位（内部公式）：</b>档位 = floor((专业×0.5 + 表达×0.3 + 人脉×0.2) / 100 × 4) + 1。你当前是 <b>${offerTier(s)} 档</b>（1 小公司 / 2 普通 / 3 好公司 / 4 大厂）。</p></div>
+    ${t5EraLineHtml(s)}
     ${eraYearCardHtml(s, 5)}
     ${shengbenHtml(s, 't5')}
     <div class="options">${T5_JOBS.map((j) => `<button class="opt" data-act="t5-pick" data-id="${j.id}"><b>${j.name}</b><span>${j.desc} 钱 +${j.money} 万/年。</span></button>`).join('')}</div>`);
@@ -1021,6 +1101,11 @@ function enterSlice(direct) {
     s.flags.housing = 'rent';
     s.rngState = rng.getState();
   }
+  // P1 (a): the T9 crisis background for this cohort, read through the
+  // unified era context. Era runs use the exam year; legacy /
+  // direct-slice runs default to 2026 (crisis 2034).
+  const ec = eraContextFor(s, 9);
+  s.flags.t9Crisis = t9CrisisForExamYear(ec.examYear);
   // H2: whether the player is laid off is sealed when the slice is entered
   // — the three decisions only shape the RESPONSE, never the outcome.
   // (Hidden: sealDie would leak omens, so store it raw on flags.)
@@ -1079,12 +1164,26 @@ function sliceBorrowOptions(s) {
 function renderSliceDecision() {
   const s = G.state;
   const d = T9_SLICE.decisions[s.sliceStep];
-  const options = d.dynamic === 'borrow' ? sliceBorrowOptions(s) : d.options;
+  let options = d.dynamic === 'borrow' ? sliceBorrowOptions(s) : d.options;
+  // P1 (f, recheck 2026-11-17): before 2013 微信 is not the default
+  // contact channel — the probe goes by QQ. 2013+ keeps 微信.
+  if (d.id === 'call-laochen' && s.flags.t9Crisis) {
+    const channel = npcInstantChannel(s.flags.t9Crisis.crisisYear);
+    if (channel !== '微信') {
+      options = options.map((o) => ({
+        ...o,
+        text: o.text.replace(/微信/g, channel),
+        seal: o.seal.replace(/微信/g, channel),
+        omen: (o.omen && o.omen.includes('微信')) ? channel + '发出去之后，半天没有回音。' : o.omen,
+      }));
+    }
+  }
   G.sliceOptions = options;
   const elapsed = Math.floor((Date.now() - (s.sliceStart || Date.now())) / 1000);
   setScreen(`
     <h1>T9 · 26 岁 · 裁员之夜</h1>
     <p class="intro">${esc(T9_SLICE.intro)}</p>
+    ${s.flags.t9Crisis ? `<p class="muted">背景：${s.flags.t9Crisis.crisisYear} 年${esc(s.flags.t9Crisis.label)}${s.flags.t9Crisis.fictional ? '（架空推演）' : ''}——这就是你撞上的那场危机。</p>` : ''}
     <p class="muted">切片用时 ${elapsed} 秒 · 第 ${s.sliceStep + 1} 个决定 / 共 3 个 · 第一个决定在 90 秒内出现（本切片直接开局即是）。</p>
     <div class="card big"><h2>${esc(d.title)}</h2><p>${esc(d.body)}</p>
       <div class="options">${options.map((o, i) => `<button class="opt" data-act="slice-pick" data-id="${i}"><b>${esc(o.text)}</b></button>`).join('')}</div>
@@ -1138,11 +1237,19 @@ function sliceEnd() {
     const got = s.decisions[d.id];
     return `<p><b>${esc(d.title)}</b><br>${got ? esc(got.text) + '——' + esc(got.seal) : '未决定'}</p>`;
   }).join('');
+  // P1 (a): the crisis background + the branch this night puts the
+  // player on. The branch only shapes the aftermath; the H2 die was
+  // sealed when the slice was entered.
+  const crisis = s.flags.t9Crisis;
+  const branch = t9Branch(s);
+  s.flags.t9Branch = branch;
+  const crisisCard = crisis ? `<div class="card"><h2>这一夜的背景</h2><p>${crisis.crisisYear} 年${esc(crisis.label)}${crisis.fictional ? '（架空推演）' : ''}。这一夜之后，你走的是「${esc(T9_BRANCH_LABEL[branch] || branch)}」这条线。</p></div>` : '';
   const omens = s.omenLog.filter((o) => o.turn === 9).map((o) => o.text).join(' ');
   setScreen(`
     <h1>切片结束 · 26 岁这一夜</h1>
     <p class="intro">${esc(T9_SLICE.outro)}</p>
     ${h2Card}
+    ${crisisCard}
     <div class="card">${decs}</div>
     <div class="card"><h2>征兆回放</h2><p>${esc(omens || '今夜没有征兆。')}</p></div>
     <div class="card"><h2>你的状态</h2>
@@ -1330,6 +1437,24 @@ document.addEventListener('click', (e) => {
       break;
     }
     case 't1-fallback': {
+      // P1 (e): 落榜调剂校外 — one rung below the lowest tier in the
+      // row, k −0.15. The major stays the intended one; the tier drops.
+      if (id === 'offcampus') {
+        const s = G.state;
+        const oc = offCampusFallback((s.flags.gaokao && s.flags.gaokao.row) || {});
+        s.major = { name: s.major ? s.major.name : '（待定）', source: 'self', tier: oc.tier };
+        s.flags.majorK = oc.k;
+        s.flags.offCampus = true;
+        s.flags.fallbackChoice = 'offcampus';
+        if (s.commitments.A) {
+          s.commitments.A.text = '志愿：' + s.major.name + '（调剂校外 · ' + oc.tier + '，k = ' + oc.k + '）';
+          s.commitments.A.snapshot.tier = oc.tier;
+          s.commitments.A.snapshot.k = oc.k;
+        }
+        autosave('落榜去向：调剂校外');
+        startYear(2);
+        break;
+      }
       G.state.flags.fallbackChoice = id;
       autosave('落榜去向：' + id);
       startYear(2);
@@ -1502,6 +1627,7 @@ document.addEventListener('click', (e) => {
     case 't5-pick': pickT5(id); break;
     case 'shengben-t5': if (attemptShengben(G.state, G.rng, 0)) screenT5(); break;
     case 'shengben-year': if (attemptShengben(G.state, G.rng, 1)) startYearRefresh(); break;
+    case 'transfer-major': if (attemptTransferMajor(G.state, G.rng)) startYearRefresh(); break;
     case 't6-pick': pickT6(id); break;
     case 'to-slice': enterSlice(false); break;
     case 'slice-pick': pickSlice(Number(id)); break;
