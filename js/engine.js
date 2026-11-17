@@ -128,6 +128,9 @@ function settleYear(state, diff) {
   const before = { ...a };
   a.stress += 4; // 主线工作基线消耗
   a.stress += diff.recovery; // 年度自然恢复（负数 = 恢复）
+  // v1.0 D 断亲：压力恢复 −3/年——恢复量少 3 点，不是压力 +3 的另一种
+  // 写法（效果上就是每年结算时压力比正常多 3 点，但语义是恢复变差）。
+  if (state.flags.estranged) a.stress += 3;
   if (a.stress > 100) { // 溢出：每溢出 1 点 → 健康 −1，压力回落到 100
     a.health -= (a.stress - 100);
     a.stress = 100;
@@ -155,6 +158,9 @@ function settleYear(state, diff) {
   }
   a.health = Math.max(0, Math.min(100, a.health));
   a.stress = Math.max(0, a.stress);
+  // v1.0 D 断亲：家庭线永久归零——结算时锁死，任何加家庭线的行动
+  // （陪家人、事件）在断亲后都不再生效（game.js 里也拦）。
+  if (state.flags.estranged) a.family = 0;
   return { before, after: { ...a }, tier: tier.id };
 }
 
@@ -208,17 +214,157 @@ function layoffChance(state) {
   return Math.max(20, Math.min(80, 20 + 15 * score));
 }
 
+function gambleChanceFrom(inp) {
+  // 承诺 E · 押注成功率（设计文档公式，对外只显示三档把握）：
+  //   15 + 专业×0.25 + 人脉×0.15 + min(20, 现金万×0.5) + 合伙人修正
+  //   + 行业周期（下行 −15）+ 伴侣共担（+8）− 压力档（紧绷 −5，崩 −12），
+  //   clamp 5%–85%。inp.tier 是 pressureTier id（'calm'/'tense'/'break'）。
+  // 注：文档 L330 的样例（专业 70、人脉 60、现金 40 万、合伙人 +15、
+  // 周期平、伴侣 +8、紧绷 −5）按本公式算得 79.5（→80），不是文档写
+  // 的 66.5——样例数与公式自洽不了，以公式为准，样例数待 Allen 定。
+  let c = 15 + inp.skill * 0.25 + inp.network * 0.15 + Math.min(20, inp.money * 0.5);
+  c += inp.partnerMod || 0;
+  if (inp.industryDown) c -= 15;
+  if (inp.partnerShares) c += 8;
+  if (inp.tier === 'tense') c -= 5;
+  if (inp.tier === 'break') c -= 12;
+  return Math.max(5, Math.min(85, Math.round(c)));
+}
+
 function gambleChance(state) {
   // 承诺 E · 押注成功率 (for T14; implemented now so the formula is testable)
   const a = state.attrs;
-  let c = 15 + a.skill * 0.25 + a.network * 0.15 + Math.min(20, a.money * 0.5);
-  c += state.flags.partnerMod || 0;
-  if (state.flags.industryDown) c -= 15;
-  if (state.flags.partnerShares) c += 8;
-  const tier = pressureTier(a.stress);
-  if (tier.id === 'tense') c -= 5;
-  if (tier.id === 'break') c -= 12;
-  return Math.max(5, Math.min(85, Math.round(c)));
+  return gambleChanceFrom({
+    skill: a.skill, network: a.network, money: a.money,
+    partnerMod: state.flags.partnerMod || 0,
+    industryDown: !!state.flags.industryDown,
+    partnerShares: !!state.flags.partnerShares,
+    tier: pressureTier(a.stress).id,
+  });
+}
+
+// ---- v1.0: H5 父母病情等级（T13 签署基础值 1–3，T16 兑现；
+// T13 带父母体检 1 AP 则 −1 级，下限 1 级）。----
+function h5Level(state) {
+  const base = state.sealed.H5 ? state.sealed.H5.value : 1;
+  return Math.max(1, base - (state.flags.h5Checkup ? 1 : 0));
+}
+
+// ---- v1.0: F 抗压判定（钱 ≥30 万 / 有伴侣支持 / 健康 ≥60，三选二）。
+// “有伴侣支持”是解释性实现：有伴侣且 H4 ≥30（H4 <30 是“只想解决自己
+// 的问题”，不算支持）。三选二成立 → 压力 +25；否则压力 +45、健康 −15。
+// ----
+function fResilience(state) {
+  const a = state.attrs;
+  const met = [];
+  if (a.money >= 30) met.push('money');
+  if (state.flags.relationship === 'partner' && state.sealed.H4 && state.sealed.H4.value >= 30) met.push('partner');
+  if (a.health >= 60) met.push('health');
+  return { pass: met.length >= 2, met };
+}
+
+// ---- v1.0: 执念达成度（35 岁结算）。
+// 文档只给了总分结构（2 条 × 0–3 分 = 0–6 分，减去代价：健康 ≤20 −2 /
+// Debt = 5 −1 / 断亲且执念含家庭 −2）与四档结局，没给每条执念 0–3 分
+// 的评分细则。下面是按终局状态的解释性实现，文档未给细则：每条执念
+// 按终局属性/状态打分，档位均为 0/1/2/3。
+//   money 经济独立：现金 ≥30 万 3 / ≥10 万 2 / ≥0 1 / 负数 0。
+//   seen 被人看见：影响力 ≥60 3 / ≥40 2 / ≥20 1 / 否则 0。
+//   home 回家：家庭线 ≥+2 3 / +1 2 / 0 1 / 负数 0。
+//   free 自由支配时间：Debt 0 且压力 <40 3 / Debt ≤1 且压力 <70 2 /
+//     Debt ≤2 1 / 否则 0。
+//   love 一段稳的关系：有伴侣且 H4 >60 3 / 有伴侣且 H4 30–60 2 /
+//     有伴侣且 H4 <30 1 / 无伴侣 0（伴侣已离开也算无伴侣）。
+//   health 身体不出问题：健康 ≥80 3 / ≥60 2 / ≥40 1 / 否则 0。
+// 结局：≥5 如愿（fulfilled）/ 3–4 换了一种如愿（another-way）/
+//   1–2 活下来了（survived）/ ≤0 重开（restart）。
+// ----
+function obsessionScore(state) {
+  const a = state.attrs;
+  const scoreOne = (id) => {
+    switch (id) {
+      case 'money': return a.money >= 30 ? 3 : a.money >= 10 ? 2 : a.money >= 0 ? 1 : 0;
+      case 'seen': return a.influence >= 60 ? 3 : a.influence >= 40 ? 2 : a.influence >= 20 ? 1 : 0;
+      case 'home': return a.family >= 2 ? 3 : a.family === 1 ? 2 : a.family === 0 ? 1 : 0;
+      case 'free': return (a.debt === 0 && a.stress < 40) ? 3 : (a.debt <= 1 && a.stress < 70) ? 2 : (a.debt <= 2) ? 1 : 0;
+      case 'love': {
+        if (state.flags.relationship !== 'partner') return 0;
+        const h4 = state.sealed.H4 ? state.sealed.H4.value : 0;
+        return h4 > 60 ? 3 : h4 >= 30 ? 2 : 1;
+      }
+      case 'health': return a.health >= 80 ? 3 : a.health >= 60 ? 2 : a.health >= 40 ? 1 : 0;
+      default: return 0;
+    }
+  };
+  const per = {};
+  let raw = 0;
+  for (const id of (state.obsessions || [])) { per[id] = scoreOne(id); raw += per[id]; }
+  const deductions = { health: 0, debt: 0, estranged: 0 };
+  if (a.health <= 20) deductions.health = 2;
+  if (a.debt === 5) deductions.debt = 1;
+  if (state.flags.estranged && (state.obsessions || []).includes('home')) deductions.estranged = 2;
+  const total = raw - deductions.health - deductions.debt - deductions.estranged;
+  const ending = total >= 5 ? 'fulfilled' : total >= 3 ? 'another-way' : total >= 1 ? 'survived' : 'restart';
+  return { per, raw, deductions, total, ending };
+}
+
+// ---- v1.0: 兑现卡第 ④ 格 · 反事实归因（承诺 E，失败时才算）。
+// 算法（设计文档）：对每个因子用当年该因子的“可达上限”替换当前值重算
+// 成功率，能翻盘的按需补差值升序、只显示最近 2 条；没有单因子能翻盘
+// → 显示“这一年没有单点能救你，是三个因子各差一点”。
+// “可达上限”按行动表估（签署在 T14、兑现 T16，中间只剩 T15 一个
+// 快进年、3 AP）：专业 +3 AP × 5 × k；人脉 +3 AP × 6；现金 +3 AP ×
+// 3 万（兼职/接私活）；压力档回到稳（T15 全用来喘气）。合伙人修正
+// （H6）与伴侣共担（H4）都是签署时封存的骰，行动改不了，上限就是当
+// 前值，不参与翻盘。snapshot 是 T14 签署时的快照（含 chance/roll）。
+// 返回 [{ factor, label, need, cap, delta, text }]（最多 2 条，按
+// delta 升序），没有能翻盘的返回 []（调用方显示兜底句）。
+// ----
+function counterfactualFlips(state) {
+  const c = state.commitments && state.commitments.E;
+  if (!c || !c.snapshot || c.snapshot.line === 'work') return [];
+  const snap = c.snapshot;
+  if (typeof snap.chance !== 'number' || typeof snap.roll !== 'number') return [];
+  if (snap.roll <= snap.chance) return []; // 本来就成功了，没有翻盘点
+  const needChance = snap.roll - snap.chance; // 至少要补这么多成功率点
+  const base = {
+    skill: snap.skill, network: snap.network, money: snap.money,
+    partnerMod: snap.partnerMod || 0, industryDown: !!snap.industryDown,
+    partnerShares: !!snap.partnerShares, tier: snap.tier || 'calm',
+  };
+  const k = snap.k || 1;
+  const cands = [];
+  // 专业：每点 +0.25 成功率。
+  const skillCap = snap.skill + 3 * 5 * k;
+  if (gambleChanceFrom({ ...base, skill: skillCap }) >= snap.roll) {
+    const delta = Math.ceil(needChance / 0.25);
+    cands.push({ factor: 'skill', label: '专业', need: snap.skill + delta, cap: skillCap, delta, unit: '点',
+      text: `真正能救你的是专业 ≥${snap.skill + delta}。你当年 ${snap.skill}，上限 ${skillCap}——差 ${delta} 点，需要 T15 的 AP 全投系统学习。` });
+  }
+  // 人脉：每点 +0.15 成功率。
+  const networkCap = snap.network + 3 * 6;
+  if (gambleChanceFrom({ ...base, network: networkCap }) >= snap.roll) {
+    const delta = Math.ceil(needChance / 0.15);
+    cands.push({ factor: 'network', label: '人脉', need: snap.network + delta, cap: networkCap, delta, unit: '点',
+      text: `真正能救你的是人脉 ≥${snap.network + delta}。你当年 ${snap.network}，上限 ${networkCap}——差 ${delta} 点，需要 T15 的 AP 全投社交局。` });
+  }
+  // 现金：每万 +0.5 成功率，但 min(20, 现金×0.5) 有 20 点上限。
+  const moneyCap = snap.money + 3 * 3;
+  if (gambleChanceFrom({ ...base, money: moneyCap }) >= snap.roll) {
+    const delta = Math.ceil(needChance / 0.5);
+    cands.push({ factor: 'money', label: '现金', need: snap.money + delta, cap: moneyCap, delta, unit: '万',
+      text: `真正能救你的是现金 ≥${snap.money + delta} 万。你当年 ${snap.money} 万，上限 ${moneyCap} 万——差 ${delta} 万，需要 T15 的 AP 全投兼职/接私活。` });
+  }
+  // 压力档：回到稳，扣的分全回来。
+  if (snap.tier === 'tense' || snap.tier === 'break') {
+    const penalty = snap.tier === 'tense' ? 5 : 12;
+    if (gambleChanceFrom({ ...base, tier: 'calm' }) >= snap.roll) {
+      cands.push({ factor: 'pressure', label: '压力', need: '稳', cap: '稳', delta: penalty, unit: '点',
+        text: `真正能救你的是压力回到稳档。你当年是${snap.tier === 'tense' ? '紧绷' : '崩'}，多扣了 ${penalty} 点成功率——T15 全用来喘气（健身/躺平/陪家人）才够。` });
+    }
+  }
+  cands.sort((x, y) => x.delta - y.delta);
+  return cands.slice(0, 2);
 }
 
 function tierLabel(pct) {
@@ -476,5 +622,5 @@ function resolveVentureYear(state, rng, venture, archetype, advanced) {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { SAVE_KEY, META_KEY, blankAttrs, newRun, saveGame, loadGame, clearSave, exportCode, importCode, loadMeta, saveMeta, pressureTier, settleYear, sealDie, offerTier, layoffChance, gambleChance, tierLabel, classifyVenture, nonVentureReason, startVenture, ventureChance, ventureThemes, resolveVentureYear, rewardText, majorAdmissionLine, bestReachableMajor, resolveAdmission };
+  module.exports = { SAVE_KEY, META_KEY, blankAttrs, newRun, saveGame, loadGame, clearSave, exportCode, importCode, loadMeta, saveMeta, pressureTier, settleYear, sealDie, offerTier, layoffChance, gambleChance, gambleChanceFrom, tierLabel, h5Level, fResilience, obsessionScore, counterfactualFlips, classifyVenture, nonVentureReason, startVenture, ventureChance, ventureThemes, resolveVentureYear, rewardText, majorAdmissionLine, bestReachableMajor, resolveAdmission };
 }

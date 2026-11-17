@@ -805,6 +805,8 @@ function eventCardHtml(ev, s) {
 // for (orphan origin has none — no parent-illness events conjured).
 function meetsRequires(req, s) {
   if (!req) return true;
+  // v1.0 D 断亲：家庭线永久归零，需要“家人”的事件不再出现。
+  if (req.family && s.flags.estranged) return false;
   if (req.student && s.turn > 4) return false;
   if (req.employment && s.flags.employment !== req.employment) return false;
   if (req.housing && s.flags.housing !== req.housing) return false;
@@ -846,6 +848,12 @@ function startYear(turn) {
   if (s.flags.nextYearApPenalty) s.flags.nextYearApPenalty = 0;
   if (s.flags.selfFunded && turn >= 2 && turn <= 5) s.ap -= 1; // 自挣学费（A 卡兑现窗口 T2–T4，v0.7 设计为 T2–T5 四年；T5 无行动环节，实际扣 T2–T4）
   s.ap = Math.max(1, s.ap);
+  // v1.0: T18 只有 1 AP——最后一件想做的事（崩档次年 AP −1 在这里不
+  // 再叠加，T18 就是 1 点）。
+  if (turn === 18) s.ap = 1;
+  // v1.0 D: 结婚的 AP 代价。文档只写“部分年份 AP −1”，没写明哪几年。
+  // 取“买房/生育年（T13）AP −1”，其余年份不扣（见设计文档 v1.0 节）。
+  if (turn === 13 && s.flags.relationship === 'partner') s.ap = Math.max(1, s.ap - 1);
   // Housing state: dorm until the internship year, then renting. Events
   // with a housing gate (ev-rent) read this, not the player's age.
   if (!s.flags.housing) s.flags.housing = 'dorm';
@@ -877,8 +885,28 @@ function startYear(turn) {
     if (good) s.attrs.influence += 4; else { s.attrs.money -= 1; s.attrs.stress += 5; }
   }
   s.rngState = rng.getState();
+  // v1.0 承诺兑现与防挫败（都在各自函数里 guard：只算一次，重进不重算）。
+  // T13 签署 H5（父母病情基础值 1–3，T16 兑现；体检可 −1 级）。
+  if (turn === 13 && !s.sealed.H5) {
+    sealDie(s, rng, 'H5', rng.int(1, 3), [
+      { text: '电话里的咳嗽声比上个月重了。' },
+      { text: '亲戚欲言又止，说“你爸妈最近总往医院跑”。' },
+      { text: '他们开始交代存折放在哪个抽屉。' },
+    ]);
+    s.rngState = rng.getState();
+  }
+  if (turn === 10) revealC(s);          // 承诺 C 在 T10 揭晓
+  if (turn === 15) t15PartnerOmen(s);   // T15 合伙人露真面目（仅创业线）
+  if (turn === 17) revealF(s);          // 承诺 F 在 T17 回顾兑现
+  // 防挫败硬规则：连续 2 次承诺兑现失败 → 本年开头强制触发一次
+  // “意外的善意”（H9 正向事件，100% 发生，不可跳过）。
+  G.kindnessHtml = kindnessCheck(s);
   if (turn === 5) return screenT5();
   if (turn === 6) return screenT6();
+  if (turn === 12) return screenT12();
+  if (turn === 14) return screenT14();
+  if (turn === 16) return screenT16();
+  if (turn === 18) return screenT18();
   // Events are gated by age AND state (v0.2): no weddings at 19, no
   // department contests or rent hikes while still a student, no care
   // events for orphans. Fall back to ungated events if nothing matches.
@@ -893,12 +921,13 @@ function startYear(turn) {
     <p class="muted">本年 AP：${s.ap}。每年只能选 3 件，这是全游戏的取舍。</p>
     ${s.flags.industryDown ? '<p class="warn">行业下行期：薪资判定 −20%，晋升成功率 −15%。</p>' : ''}
     ${eraYearCardHtml(s, turn)}
+    ${yearExtraCardsHtml(s)}
     ${eventCardHtml(ev, s)}
     ${venturePanelHtml(s)}
     ${shengbenHtml(s, 'year')}
     ${transferMajorHtml(s)}
     <h2>今年的行动（${s.ap} AP）</h2>
-    <div class="options">${ventureActionHtml(s)}${ACTIONS.map((ac) => `<button class="opt" data-act="action" data-id="${ac.id}" ${s.ap < ac.ap ? 'disabled' : ''}><b>${ac.name}</b><span>${ac.desc}</span></button>`).join('')}</div>
+    <div class="options">${ventureActionHtml(s)}${yearActionButtons(s)}</div>
     <div class="actions"><button class="primary" data-act="year-end">结束这一年 → 结算</button></div>`);
 }
 
@@ -906,6 +935,8 @@ function applyAction(id) {
   const s = G.state;
   const ac = ACTIONS.find((x) => x.id === id);
   if (!ac || s.ap < ac.ap) return;
+  // v1.0 D 断亲：此项消失（按钮已隐藏，这里是纵深防御）。
+  if (s.flags.estranged && id === 'family') return;
   s.ap -= ac.ap;
   const a = s.attrs;
   // Copy fx: never mutate the shared ACTIONS table (study's k-multiplier
@@ -932,12 +963,13 @@ function startYearRefresh() {
     <h1>T${turn} · ${17 + turn} 岁</h1>
     <p class="muted">本年 AP：${s.ap}。已选：${s.yearActions.join('、') || '无'}</p>
     ${eraYearCardHtml(s, turn)}
+    ${yearExtraCardsHtml(s)}
     ${eventCardHtml(ev, s)}
     ${venturePanelHtml(s)}
     ${shengbenHtml(s, 'year')}
     ${transferMajorHtml(s)}
     <h2>今年的行动（${s.ap} AP）</h2>
-    <div class="options">${ventureActionHtml(s)}${ACTIONS.map((ac) => `<button class="opt" data-act="action" data-id="${ac.id}" ${s.ap < ac.ap ? 'disabled' : ''}><b>${ac.name}</b><span>${ac.desc}</span></button>`).join('')}</div>
+    <div class="options">${ventureActionHtml(s)}${yearActionButtons(s)}</div>
     <div class="actions"><button class="primary" data-act="year-end">结束这一年 → 结算</button></div>`);
 }
 
@@ -997,8 +1029,590 @@ function endYear() {
       <div><b>被记下的征兆</b><p>${esc(s.omenLog.filter((o) => o.turn === s.turn).map((o) => o.text).join(' ') || '今年没有征兆。')}</p></div>
       ${ventureLines.length ? `<div><b>我的项目</b><p>${esc(ventureLines.join(' '))}</p></div>` : ''}
     </div>
-    ${next <= 8 ? `<div class="actions"><button class="primary" data-act="year-next" data-id="${next}">进入 T${next} · ${17 + next} 岁</button></div>`
-      : `<div class="actions"><button class="primary" data-act="to-slice">进入 T9 · 26 岁裁员之夜</button></div>`}`);
+    ${next === 9 ? `<div class="actions"><button class="primary" data-act="to-slice">进入 T9 · 26 岁裁员之夜</button></div>`
+      : `<div class="actions"><button class="primary" data-act="year-next" data-id="${next}">进入 T${next} · ${17 + next} 岁</button></div>`}`);
+}
+
+// ---------- v1.0: T10–T18 ----------
+function yearActionButtons(s) {
+  // v1.0 D 断亲后“陪家人 / 伴侣”此项消失。
+  return ACTIONS.filter((ac) => !(s.flags.estranged && ac.id === 'family'))
+    .map((ac) => `<button class="opt" data-act="action" data-id="${ac.id}" ${s.ap < ac.ap ? 'disabled' : ''}><b>${ac.name}</b><span>${ac.desc}</span></button>`).join('');
+}
+
+function yearExtraCardsHtml(s) {
+  return cRevealCardHtml(s) + h5SignHtml(s) + h5CheckupHtml(s) + t15OmenHtml(s) + fRevealCardHtml(s) + dStatusHtml(s) + (G.kindnessHtml || '');
+}
+
+function omenReplayHtml(s, turns) {
+  const list = (s.omenLog || []).filter((o) => turns.includes(o.turn)).map((o) => o.text).reverse();
+  return list.length ? esc(list.join(' ')) : '那几年没有留下征兆。';
+}
+
+// 教训卡：每次兑现卡的第 ④⑤ 格生成一张，存进图鉴（state.lessons +
+// meta.lessons，只继承信息，不继承数值）。兑现卡能挂进图鉴脚手架就
+// 挂——这里就是那个脚手架（loadMeta 的 lessons）。
+function addLesson(s, id, text) {
+  s.lessons = s.lessons || [];
+  if (!s.lessons.some((l) => l.id === id)) s.lessons.push({ id, text });
+  if (G.meta) {
+    G.meta.lessons = G.meta.lessons || [];
+    if (!G.meta.lessons.some((l) => l.id === id)) {
+      G.meta.lessons.push({ id, text });
+      saveMeta(G.meta);
+    }
+  }
+}
+
+// ---------- v1.0: 承诺 C 在 T10 揭晓 ----------
+function revealC(s) {
+  if (s.flags.cRevealed) return;
+  s.flags.cRevealed = true;
+  const h2 = s.flags.h2;
+  if (h2 && h2.laidOff) s.flags.consecFails = (s.flags.consecFails || 0) + 1;
+  else s.flags.consecFails = 0;
+  addLesson(s, 'C', 'H2 裁员名单：进切片那一刻就封存了，三个决定只定应对、不定结果。');
+  autosave('承诺 C 已兑现');
+}
+
+function cRevealCardHtml(s) {
+  if (s.turn !== 10 || !s.flags.cRevealed) return '';
+  return redemptionCardHtml(s, 'C');
+}
+
+// ---------- v1.0: H5 体检（T13，1 AP）----------
+function h5SignHtml(s) {
+  if (s.turn !== 13 || !s.sealed.H5) return '';
+  return `<div class="card"><h2>父母的身体 · 已封存</h2><p>征兆：${esc(s.sealed.H5.omens.map((o) => o.text).join(' '))}</p><p class="muted">这颗骰在你 30 岁那年掷出，T16 兑现。带父母体检（1 AP）可让等级 −1。</p></div>`;
+}
+
+function h5CheckupHtml(s) {
+  if (s.turn !== 13 || !s.sealed.H5 || s.flags.h5Checkup) return '';
+  return `<div class="card"><h2>带父母体检</h2><button class="opt" data-act="h5-checkup" ${s.ap < 1 ? 'disabled' : ''}><b>带父母去体检</b><span>1 AP。T13 才能做：父母病情等级 −1（T16 兑现时算）。${s.ap < 1 ? '（AP 不够）' : ''}</span></button></div>`;
+}
+
+// ---------- v1.0: T15 合伙人露真面目（仅创业线）----------
+function t15PartnerOmen(s) {
+  if (s.flags.t15OmenDone) return;
+  s.flags.t15OmenDone = true;
+  const c = s.commitments.E;
+  if (!c || !c.snapshot || c.snapshot.line !== 'startup') return;
+  const h6 = (s.sealed.H6 && s.sealed.H6.value);
+  if (typeof h6 !== 'number') return;
+  const text = h6 < 35
+    ? '他谈分成时看了三次手机，说“信号不好，晚点回你”。'
+    : h6 <= 60
+      ? '他说家里有点事，这个月的钱晚几天再打。'
+      : '他先垫了这个月的房租，说“账以后再算”。';
+  s.flags.t15OmenText = text;
+  s.omenLog.push({ turn: 15, text });
+  autosave('合伙人露真面目');
+}
+
+function t15OmenHtml(s) {
+  if (s.turn !== 15 || !s.flags.t15OmenText) return '';
+  return `<div class="card"><h2>合伙人开始露真面目</h2><p>${esc(s.flags.t15OmenText)}</p><p class="muted">征兆已记下，T16 兑现那天会拿出来对照。</p></div>`;
+}
+
+// ---------- v1.0: 承诺 F 在 T17 回顾兑现 ----------
+function revealF(s) {
+  if (s.flags.fRevealed) return;
+  s.flags.fRevealed = true;
+  addLesson(s, 'F', 'F 父母的病：没有正确选项的一格。选哪个，都是真的放弃。');
+  autosave('承诺 F 已兑现');
+}
+
+function fRevealCardHtml(s) {
+  if (s.turn !== 17 || !s.flags.fRevealed || !s.commitments.F) return '';
+  return redemptionCardHtml(s, 'F');
+}
+
+// ---------- v1.0: D 在 T13 的持续兑现（一行状态）----------
+function dStatusHtml(s) {
+  if (s.turn !== 13 || !s.commitments.D) return '';
+  if (s.flags.relationship === 'partner') return `<div class="card"><p><b>伴侣线：</b>你们一起扛到了 30 岁。T14 押注时他/她是否共担，看 T12 签署时封存的 H4（大于 60 才共担）。</p></div>`;
+  if (s.flags.estranged) return `<div class="card"><p><b>断亲后：</b>家庭线一直是 0，压力每年少恢复 3 点。“陪家人”这条路已经没有了。</p></div>`;
+  return `<div class="card"><p><b>关系槽：</b>这一格空着。T14 押注、T16 父母病倒，都只能靠你自己。</p></div>`;
+}
+
+// ---------- v1.0: 防挫败硬规则（连续 2 次兑现失败 → 意外的善意）----------
+function kindnessName(s) {
+  if (s.flags.relationship === 'partner') return '伴侣';
+  if (s.flags.stance === 'li') return '老李';
+  if (s.flags.stance === 'wang') return '王姐';
+  return '老陈';
+}
+
+function kindnessHtmlFor(s) {
+  return `<div class="card"><h2>意外的善意</h2><p>${esc(kindnessName(s))}主动帮了你一次，没提条件。压力 −8，人脉 +2。连续两次兑现失败之后，总得有人推你一把——这是规则，不是运气。</p></div>`;
+}
+
+function kindnessCheck(s) {
+  // 本年已触发过（重进/刷新）：只显示卡，不再重复给收益。
+  if (s.flags.kindnessTurn === s.turn) return kindnessHtmlFor(s);
+  if ((s.flags.consecFails || 0) < 2) return '';
+  s.flags.kindnessTurn = s.turn;
+  s.flags.consecFails = 0;
+  s.attrs.stress = Math.max(0, s.attrs.stress - 8);
+  s.attrs.network = (s.attrs.network || 0) + 2;
+  s.yearlyLog.push({ turn: s.turn, type: 'kindness', text: '意外的善意：' + kindnessName(s) + '主动帮了你一次。压力 −8，人脉 +2。' });
+  autosave('意外的善意');
+  return kindnessHtmlFor(s);
+}
+
+// ---------- v1.0: 承诺兑现卡（五格）----------
+// ① 你当时押的 ② 当时封的骰 ③ 现在揭晓 ④ 反事实归因 ⑤ 征兆回放。
+// 来源标签统一：“这颗骰在你 X 岁那年掷出”，仅 H0 显示“出生那年”
+// （H2 26 岁、H4 29 岁、H5 30 岁、E/H6 31 岁）。
+function redemptionCardHtml(s, id) {
+  const grid = (a, b, c, d, e) => `<div class="card"><h2>承诺兑现卡 · ${id}</h2><div class="settle">
+    <div><b>① 你当时押的</b><p>${a}</p></div>
+    <div><b>② 当时封的骰</b><p>${b}</p></div>
+    <div><b>③ 现在揭晓</b><p>${c}</p></div>
+    <div><b>④ 反事实归因</b><p>${d}</p></div>
+    <div><b>⑤ 征兆回放</b><p>${e}</p></div>
+  </div></div>`;
+  const noFormula = '这张卡没有可以重算的成功率公式，所以没有最小翻盘点。';
+  if (id === 'C') {
+    const h2 = s.flags.h2 || {};
+    const decs = T9_SLICE.decisions.map((dd) => {
+      const got = s.decisions[dd.id];
+      return got ? got.text : '未决定';
+    }).join('；');
+    const branch = s.flags.t9Branch ? (T9_BRANCH_LABEL[s.flags.t9Branch] || s.flags.t9Branch) : '未知';
+    return grid(
+      esc('裁员应对：' + decs),
+      (typeof h2.chance === 'number'
+        ? `裁员概率 ${h2.chance}%，掷出 ${h2.roll}。这颗骰在你 26 岁那年掷出。`
+        : '没有封存的 H2（旧存档或直接进 T10）。'),
+      (typeof h2.laidOff === 'boolean'
+        ? (h2.laidOff ? `被裁了。N = 8 万到账，走的是「${esc(branch)}」这条线。` : `岗位保住了，走的是「${esc(branch)}」这条线。`)
+        : '裁员判定未知。'),
+      '裁员名单没有最小翻盘点：进名单的四个原因，都是过去三年写好的。',
+      omenReplayHtml(s, [9]));
+  }
+  if (id === 'E') {
+    const c = s.commitments.E;
+    if (!c) return '';
+    const snap = c.snapshot || {};
+    const res = s.flags.eResult || {};
+    const tierName = { calm: '稳', tense: '紧绷', break: '崩' }[snap.tier] || '稳';
+    const first = esc(c.text) + `<br>当年：专业 ${snap.skill}、人脉 ${snap.network}、现金 ${snap.money} 万、压力${tierName}。`;
+    if (snap.line === 'work') {
+      return grid(first, '没有封存的骰子：你没押。',
+        esc(res.note || '两年平稳打工。'), '没押注，就没有翻盘点。', omenReplayHtml(s, [14, 15, 16]));
+    }
+    const second = `签署时只给你看的三档把握是「${tierLabel(snap.chance)}」。这颗骰在你 31 岁那年掷出。`;
+    let third = `精确成功率 ${snap.chance}%，掷出 ${snap.roll}：${res.success ? '成了。' : '没成。'}`;
+    if (res.success) third += ` 押的 ${snap.staked} 万翻倍回来（本金 + 等额收益），影响力 +20。`;
+    else {
+      third += snap.line === 'startup' ? ' 押的现金归零，压力进崩档，健康 −20。' : ` 押的 ${snap.staked} 万没了，压力进崩档，健康 −20。`;
+      if (typeof snap.h6 === 'number' && snap.h6 < 35) third += ' 合伙人卷款跑路（H6 < 35），剩下的钱再 −30%。';
+      if (res.divorced) third += ' 伴侣也走了（H4 < 30，押注失败触发离婚/分手）。';
+    }
+    let fourth;
+    if (res.success) fourth = '成功了。没有需要翻盘的点。';
+    else {
+      const flips = counterfactualFlips(s);
+      fourth = flips.length ? flips.map((f) => esc(f.text)).join('<br>') : '这一年没有单点能救你，是三个因子各差一点。';
+    }
+    return grid(first, second, third, fourth, omenReplayHtml(s, [14, 15, 16]));
+  }
+  if (id === 'F') {
+    const c = s.commitments.F;
+    if (!c) return '';
+    const h5 = s.flags.h5Result || {};
+    const fr = s.flags.fResult || {};
+    const metNames = { money: '钱 ≥30 万', partner: '有伴侣支持', health: '健康 ≥60' };
+    const metText = (fr.met || []).map((m) => metNames[m]).join('、') || '三项都没够上';
+    return grid(
+      esc(c.text) + `<br>父母病情 ${h5.level || '?'} 级${h5.checkup ? '（体检 −1 级）' : ''}。`,
+      '这一格没有封存的骰子——没有正确选项，只有取舍。父母病情那颗骰在你 30 岁那年掷出（T13 签署）。',
+      `抗压判定：${esc(metText)}，三选二${fr.pass ? '成立' : '不成立'}，压力 +${fr.pass ? 25 : 45}${fr.pass ? '' : '、健康 −15'}。`,
+      '这一格没有成功率公式，所以没有最小翻盘点：三个选项都疼，选哪个都是真的放弃。',
+      omenReplayHtml(s, [13, 14, 15, 16]));
+  }
+  return '';
+}
+
+// ---------- v1.0: T12 关系锁定 ----------
+function screenT12() {
+  const s = G.state;
+  if (s.commitments.D) { showT12Signed(s); return; }
+  setScreen(`
+    <h1>T12 · 29 岁 · 关系锁定</h1>
+    <p class="intro">只此一个亲密关系槽，占满 6 年（T13–T18）。这一格没有骰子——但它决定 T14 押注时伴侣是否共担，也决定 T16 那一格你身边有没有人。</p>
+    ${G.kindnessHtml || ''}
+    <div class="options">
+      <button class="opt" data-act="t12-pick" data-id="partner"><b>和伴侣定下来（结婚）</b><span>现金 −30 万；买房/生育年（T13）AP −1。伴侣的真实想法在签署时封存（H4），T14 押注时见分晓。</span></button>
+      <button class="opt" data-act="t12-pick" data-id="estranged"><b>断亲</b><span>家庭线永久归零；自主执念进度 +2；压力恢复 −3/年（每年结算时恢复量少 3）。“陪家人”行动从此消失。</span></button>
+      <button class="opt" data-act="t12-pick" data-id="none"><b>都不选</b><span>这一格空着。6 年里没有人跟你分担，也没有人拖你后腿。</span></button>
+    </div>
+    <p class="muted">承诺 D（关系槽，T13–T18 持续兑现）：无骰，但 H4 决定 T14 押注时伴侣是否共担。</p>`);
+}
+
+function showT12Signed(s) {
+  const d = s.commitments.D;
+  const h4 = s.sealed.H4;
+  setScreen(`
+    <h1>承诺卡 D 已签署</h1>
+    <div class="card"><p>${esc(d ? d.text : '')}</p>
+    ${h4 ? `<p>征兆：${esc(h4.omens.map((o) => o.text).join(' '))}</p><p class="muted">伴侣的真实想法已在签署时封存（H4，29 岁那年掷出）。他/她是否愿共担风险，T14 押注时见分晓——对外只看征兆，不看数字。</p>` : ''}
+    ${s.flags.estranged ? '<p>家庭线已归零，压力恢复从此每年少 3 点。“陪家人”行动已消失。</p>' : ''}
+    <p class="muted">D 在 T13–T18 持续兑现：结婚的 AP 代价落在 T13；伴侣共担落在 T14；有没有人陪你扛，落在 T16。</p></div>
+    <div class="actions"><button class="primary" data-act="year-next" data-id="13">进入 T13 · 30 岁</button></div>`);
+}
+
+function pickT12(id) {
+  const s = G.state, a = s.attrs;
+  if (s.commitments.D) { showT12Signed(s); return; }
+  if (id === 'partner') {
+    a.money -= 30;
+    s.flags.relationship = 'partner';
+    // H4：伴侣真实想法，签署时 roll 1–100 封存。>60 愿共担风险，
+    // 30–60 只想稳定，<30 只想解决自己的问题。
+    sealDie(s, G.rng, 'H4', G.rng.int(1, 100), [
+      { text: '他/她谈钱的时候，先算的是你们俩的账。' },
+      { text: '你加班到半夜，他/她问的是“什么时候回来”。' },
+      { text: '见父母时，他/她坐在你这边。' },
+    ]);
+    s.commitments.D = { text: '关系槽：伴侣（结婚，现金 −30 万）', signedAt: 'T12', dueTurn: 13, snapshot: { ...a } };
+  } else if (id === 'estranged') {
+    a.family = 0;
+    s.flags.estranged = true;
+    s.flags.relationship = 'none';
+    s.flags.obsessionProgress = (s.flags.obsessionProgress || 0) + 2;
+    s.commitments.D = { text: '关系槽：断亲（家庭线永久归零）', signedAt: 'T12', dueTurn: 13, snapshot: { ...a } };
+  } else {
+    s.flags.relationship = 'none';
+    s.commitments.D = { text: '关系槽：都不选', signedAt: 'T12', dueTurn: 13, snapshot: { ...a } };
+  }
+  s.rngState = G.rng.getState();
+  autosave('承诺 D 已签署');
+  Analytics.track('commitment', { card: 'D', choice: id });
+  showT12Signed(s);
+}
+
+// ---------- v1.0: T14 押注 ----------
+const E_LINES = [
+  { id: 'startup', name: '创业', desc: '押上全部现金 + 2 年时间 + 绑定合伙人。合伙人可靠性在签署时封存（H6）。失败：现金归零、压力进崩档、健康 −20。' },
+  { id: 'abroad', name: '裸辞出国', desc: '押上一半现金，出去闯两年。没有合伙人，成败只看你自己攒下的底子。' },
+  { id: 'takeover', name: '接盘', desc: '接手一个现成的盘子，押上一半现金。盘子是现成的，坑也是现成的。' },
+  { id: 'work', name: '继续打工', desc: '不押注。两年平稳打工，攒下 4 万，压力 +4。没有骰子，也没有翻盘。' },
+];
+
+function eOmensFor(lineId) {
+  // 兑现结果的征兆（签署时给玩家看，准确率 65%，见 sealDie）。
+  if (lineId === 'startup') return [
+    { text: '签约那天，他迟到了半小时。' },
+    { text: '第一笔钱打过去之后，他三天没回消息。' },
+  ];
+  if (lineId === 'abroad') return [
+    { text: '签证材料递上去的那天，你手心全是汗。' },
+    { text: '中介的电话开始打不通了。' },
+  ];
+  if (lineId === 'takeover') return [
+    { text: '交接那天，前老板走得很快。' },
+    { text: '账本上有两页被撕掉了。' },
+  ];
+  return [];
+}
+
+function screenT14() {
+  const s = G.state;
+  if (s.commitments.E) { showT14Signed(s); return; }
+  const a = s.attrs;
+  setScreen(`
+    <h1>T14 · 31 岁 · 押注</h1>
+    <p class="intro">唯一的主动高风险押注。押上现金 + 2 年时间。成功率公式只对外显示三档把握（没什么底 / 五五开 / 有戏），精确数字 T16 兑现时才揭。</p>
+    <div class="card"><p>你现在的底子：专业 ${a.skill}、人脉 ${a.network}、现金 ${a.money} 万、压力${pressureTier(a.stress).name}${s.flags.industryDown ? '、行业下行' : ''}${s.flags.relationship === 'partner' ? '、有伴侣' : ''}。</p></div>
+    ${G.kindnessHtml || ''}
+    <div class="options">${E_LINES.map((l) => `<button class="opt" data-act="t14-pick" data-id="${l.id}"><b>${l.name}</b><span>${l.desc}</span></button>`).join('')}</div>
+    <p class="muted">承诺 E（押注，T16 兑现）：基础 15 + 专业×0.25 + 人脉×0.15 + min(20, 现金万×0.5) + 合伙人修正 + 行业周期 + 伴侣共担 − 压力档。合伙人修正只在创业线有（H6：&gt;60 +15，35–60 −10，&lt;35 −25）。</p>`);
+}
+
+function showT14Signed(s) {
+  const e = s.commitments.E;
+  const snap = (e && e.snapshot) || {};
+  const h6 = (s.sealed.H6 && s.sealed.H6.value);
+  const h6Text = typeof h6 === 'number'
+    ? (h6 > 60 ? '合伙人看着还算靠谱。' : h6 >= 35 ? '合伙人可能中途掉链子。' : '合伙人不太对劲。')
+    : '';
+  setScreen(`
+    <h1>承诺卡 E 已签署</h1>
+    <div class="card"><p>${esc(e ? e.text : '')}</p>
+    ${snap.line === 'work'
+      ? '<p>没有骰子。两年平稳打工，T16 兑现时现金 +4 万，压力 +4。</p>'
+      : `<p>把握：<b>${tierLabel(snap.chance)}</b>（对外只显示三档，精确成功率 T16 才揭）。这颗骰在你 31 岁那年掷出。</p>
+      <p>征兆：${esc((s.sealed.E ? s.sealed.E.omens : []).map((o) => o.text).join(' '))}</p>
+      ${h6Text ? `<p>${h6Text}</p>` : ''}`}
+    <p class="muted">T15 是押注的煎熬期，合伙人开始露真面目；T16 兑现。</p></div>
+    <div class="actions"><button class="primary" data-act="year-next" data-id="15">进入 T15 · 32 岁</button></div>`);
+}
+
+function pickT14(lineId) {
+  const s = G.state, a = s.attrs;
+  if (s.commitments.E) { showT14Signed(s); return; }
+  const line = E_LINES.find((l) => l.id === lineId) || E_LINES[3];
+  // 伴侣共担：H4 > 60 才算（T12 签署时封存）。
+  const h4 = s.sealed.H4 ? s.sealed.H4.value : 0;
+  s.flags.partnerShares = s.flags.relationship === 'partner' && h4 > 60;
+  let partnerMod = 0, h6 = null, staked = 0;
+  if (line.id === 'startup') {
+    // H6：合伙人可靠性，仅创业线 roll 1–100。人脉 ≥50 +10；此前合作
+    // 过 +15——“此前合作过”是解释性实现：本局开过专属线（ventures）
+    // 即算合作经验。H6 表写 35–60 成功率 −20%，公式写 −10，以公式为准。
+    let roll = G.rng.int(1, 100);
+    if (a.network >= 50) roll += 10;
+    if ((s.ventures || []).length) roll += 15;
+    h6 = Math.max(0, Math.min(100, roll));
+    partnerMod = h6 > 60 ? 15 : h6 >= 35 ? -10 : -25;
+    s.flags.partnerMod = partnerMod;
+    s.flags.h6 = h6;
+    sealDie(s, G.rng, 'H6', h6, [
+      { text: '他谈分成时的眼神飘了一下。' },
+      { text: '他说“先干起来，钱的事以后再说”。' },
+      { text: '他把老婆拉进了群，说“家里人都支持”。' },
+    ]);
+    staked = a.money;
+  } else if (line.id === 'abroad' || line.id === 'takeover') {
+    s.flags.partnerMod = 0;
+    staked = Math.round(a.money / 2 * 10) / 10;
+  } else {
+    s.flags.partnerMod = 0;
+    staked = 0;
+  }
+  const tier = pressureTier(a.stress).id;
+  const inp = { skill: a.skill, network: a.network, money: a.money, partnerMod: s.flags.partnerMod || 0, industryDown: !!s.flags.industryDown, partnerShares: !!s.flags.partnerShares, tier };
+  const chance = line.id === 'work' ? null : gambleChanceFrom(inp);
+  // 封存：成功率与掷出值都在签署时定死，T16 只读档、不重掷。
+  let roll = null;
+  if (chance !== null) {
+    roll = G.rng.int(1, 100);
+    sealDie(s, G.rng, 'E', roll, eOmensFor(line.id));
+  }
+  s.commitments.E = {
+    text: '押注：' + line.name + (line.id === 'startup' ? '（押全部现金 ' + staked + ' 万）' : line.id === 'work' ? '（不押）' : '（押一半现金 ' + staked + ' 万）'),
+    signedAt: 'T14', dueTurn: 16,
+    snapshot: { ...inp, k: s.flags.majorK || 1, staked, line: line.id, chance, roll, h6 },
+  };
+  s.rngState = G.rng.getState();
+  autosave('承诺 E 已签署');
+  Analytics.track('commitment', { card: 'E', choice: line.id });
+  showT14Signed(s);
+}
+
+// ---------- v1.0: T16 兑现 E + H5 + 签署 F ----------
+function resolveE(s) {
+  if (s.flags.eResolved) return;
+  s.flags.eResolved = true;
+  const c = s.commitments.E;
+  const a = s.attrs;
+  if (!c) { s.flags.eResult = { line: 'none', success: null, note: 'T14 没签押注。' }; return; }
+  const snap = c.snapshot || {};
+  if (snap.line === 'work') {
+    // 继续打工：不押注。两年平稳打工，攒下 4 万（2 万/年，解释性实现），压力 +4。
+    a.money += 4; a.stress += 4;
+    s.flags.eResult = { line: 'work', success: null, note: '两年平稳打工，攒下 4 万，压力 +4。没有骰子，也没有翻盘。' };
+    return;
+  }
+  const success = snap.roll <= snap.chance;
+  const staked = snap.staked || 0;
+  const res = { line: snap.line, success, chance: snap.chance, roll: snap.roll, h6: snap.h6, staked, divorced: false };
+  if (success) {
+    // 成功：钱/影响力跳档——押的钱翻倍回来（本金 + 等额收益），影响力 +20。
+    a.money = Math.round((a.money + staked) * 10) / 10;
+    a.influence += 20;
+  } else {
+    // 失败：创业押全部≈现金归零；出国/接盘押一半，扣押金、剩一半。
+    // H6 < 35 卷款跑路：剩下的钱再 −30%（创业失败已归零，这一项只在
+    // 剩钱时才咬得到数，见设计文档 v1.0 节待定清单）。
+    if (snap.line === 'startup') a.money = 0;
+    else a.money = Math.max(0, Math.round((a.money - staked) * 10) / 10);
+    if (typeof snap.h6 === 'number' && snap.h6 < 35) a.money = Math.round(a.money * 0.7 * 10) / 10;
+    a.stress = Math.max(a.stress, 75); // 压力进崩档
+    a.health -= 20;
+    // H4 < 30：押注失败额外触发离婚/分手事件。
+    if (s.flags.relationship === 'partner' && s.sealed.H4 && s.sealed.H4.value < 30) {
+      s.flags.relationship = 'none';
+      s.flags.partnerGone = true;
+      res.divorced = true;
+    }
+  }
+  a.health = Math.max(0, Math.min(100, a.health));
+  a.stress = Math.min(100, Math.max(0, a.stress));
+  a.money = Math.round(a.money * 10) / 10;
+  s.flags.eResult = res;
+  if (success) s.flags.consecFails = 0;
+  else s.flags.consecFails = (s.flags.consecFails || 0) + 1;
+  addLesson(s, 'E', 'E 押注：成功率是算出来的，不是许愿许出来的；兑现卡第 ④ 格写着最小翻盘点。');
+  autosave('承诺 E 已兑现');
+}
+
+function h5CostText(lvl) {
+  if (lvl === 1) return '1 级：现金 −15 万，压力 +15。';
+  if (lvl === 2) return '2 级：现金 −40 万，压力 +30，还必须放弃一条线（下面选）。';
+  return '3 级：现金 −80 万，压力 +45，健康 −15，破防事件。';
+}
+
+function applyH5(s) {
+  if (s.flags.h5Applied) return;
+  s.flags.h5Applied = true;
+  const lvl = h5Level(s);
+  const a = s.attrs;
+  if (lvl === 1) { a.money -= 15; a.stress += 15; }
+  else if (lvl === 2) { a.money -= 40; a.stress += 30; }
+  else { a.money -= 80; a.stress += 45; a.health -= 15; }
+  a.money = Math.round(a.money * 10) / 10;
+  a.health = Math.max(0, Math.min(100, a.health));
+  a.stress = Math.min(100, a.stress);
+  s.flags.h5Result = { level: lvl, checkup: !!s.flags.h5Checkup, base: s.sealed.H5 ? s.sealed.H5.value : 1 };
+  autosave('父母病情已兑现（H5 ' + lvl + ' 级）');
+}
+
+function screenT16() {
+  const s = G.state;
+  resolveE(s);
+  applyH5(s);
+  if (s.commitments.F) { showT16Signed(s); return; }
+  const lvl = s.flags.h5Result.level;
+  setScreen(`
+    <h1>T16 · 33 岁 · 父母病倒</h1>
+    <p class="intro">没有正确选项的一格。必须放弃事业 / 关系 / 健康之一，没有第三个选项。放弃的那条线永久 −1 格。</p>
+    ${redemptionCardHtml(s, 'E')}
+    <div class="card"><h2>父母的病（H5 · ${lvl} 级${s.flags.h5Result.checkup ? '，体检 −1 级' : ''}）</h2>
+      <p>${h5CostText(lvl)}</p>
+      <p class="muted">这颗骰在你 30 岁那年掷出（T13 签署）${s.flags.h5Result.checkup ? '；你带他们做过体检，等级 −1。' : '；T13 你没带他们体检。'}</p>
+      ${lvl === 3 ? '<p class="warn">破防事件：那天晚上你没睡着。不是钱的事，是你第一次发现，他们真的会老。（破防事件的具体内容文档未给，当前为占位文案，见设计文档 v1.0 节待定清单。）</p>' : ''}
+    </div>
+    ${G.kindnessHtml || ''}
+    <h2>你放弃哪一条线？</h2>
+    <div class="options">
+      <button class="opt" data-act="t16-pick" data-id="career"><b>放弃事业</b><span>专业 −10，影响力 −10。升职、跳槽、创业线都先放下。</span></button>
+      <button class="opt" data-act="t16-pick" data-id="relationship"><b>放弃关系</b><span>家庭线 −2。${s.flags.relationship === 'partner' ? '伴侣离开。' : '（你现在没有伴侣，断的是和家人的线。）'}</span></button>
+      <button class="opt" data-act="t16-pick" data-id="health"><b>放弃健康</b><span>健康 −20。自己的身体先往后排。</span></button>
+    </div>
+    <p class="muted">抗压判定（钱 ≥30 万 / 有伴侣支持 / 健康 ≥60，三选二）：成立 → 压力 +25；否则压力 +45、健康 −15。判定读放弃前的状态（H5 的账已结过）。</p>`);
+}
+
+function showT16Signed(s) {
+  setScreen(`
+    <h1>承诺卡 F 已签署</h1>
+    ${redemptionCardHtml(s, 'E')}
+    ${redemptionCardHtml(s, 'F')}
+    <div class="actions"><button class="primary" data-act="year-next" data-id="17">进入 T17 · 34 岁</button></div>`);
+}
+
+function pickT16(id) {
+  const s = G.state, a = s.attrs;
+  if (s.commitments.F) { showT16Signed(s); return; }
+  // 抗压判定读放弃前的状态（H5 的账已在进 T16 时结过，放弃的代价
+  // 不应反过来改写判定本身）。
+  const res = fResilience(s);
+  // 放弃的那条线永久 −1 格（解释性映射：事业 = 专业/影响力各 −10；
+  // 关系 = 家庭线 −2，有伴侣则伴侣离开；健康 = 健康 −20）。
+  if (id === 'career') { a.skill -= 10; a.influence -= 10; }
+  else if (id === 'relationship') {
+    a.family -= 2;
+    if (s.flags.relationship === 'partner') { s.flags.relationship = 'none'; s.flags.partnerGone = true; }
+  } else { a.health -= 20; }
+  if (res.pass) a.stress += 25;
+  else { a.stress += 45; a.health -= 15; }
+  a.health = Math.max(0, Math.min(100, a.health));
+  a.stress = Math.min(100, Math.max(0, a.stress));
+  const label = { career: '事业', relationship: '关系', health: '健康' }[id];
+  s.commitments.F = { text: '父母的病：放弃' + label + '（H5 ' + (s.flags.h5Result ? s.flags.h5Result.level : '?') + ' 级）', signedAt: 'T16', dueTurn: 17, snapshot: { ...a } };
+  s.flags.fResult = res;
+  if (res.pass) s.flags.consecFails = 0;
+  else s.flags.consecFails = (s.flags.consecFails || 0) + 1;
+  s.rngState = G.rng.getState();
+  autosave('承诺 F 已签署');
+  Analytics.track('commitment', { card: 'F', choice: id });
+  showT16Signed(s);
+}
+
+// ---------- v1.0: T18 最后一件想做的事 + 35 岁结算 ----------
+// T18 不做年度结算：1 AP 的行动之后直接结算，结算卡就是这一年的账单。
+function screenT18() {
+  const s = G.state;
+  const done = !!s.flags.t18Done;
+  setScreen(`
+    <h1>T18 · 35 岁 · 最后一件想做的事</h1>
+    <p class="intro">AP 只有 1。做完这一件，就去结算。</p>
+    ${G.kindnessHtml || ''}
+    ${done
+      ? `<div class="card"><p>你做的最后一件事：<b>${esc({ family: '陪家人/伴侣吃顿饭', health: '好好睡一觉，去体检', write: '把这 18 年写下来' }[s.flags.t18Choice] || '')}</b></p></div>
+      <div class="actions"><button class="primary" data-act="t18-settle">去结算 · 35 岁</button></div>`
+      : `<div class="options">
+      <button class="opt" data-act="t18-pick" data-id="family" ${s.flags.estranged ? 'disabled' : ''}><b>陪家人/伴侣吃顿饭</b><span>1 AP。家庭线 +1，压力 −8。${s.flags.estranged ? '（断亲后没有这条路。）' : ''}</span></button>
+      <button class="opt" data-act="t18-pick" data-id="health"><b>好好睡一觉，去体检</b><span>1 AP。健康 +5，压力 −8。</span></button>
+      <button class="opt" data-act="t18-pick" data-id="write"><b>把这 18 年写下来</b><span>1 AP。影响力 +6，压力 −3。写给以后的人看。</span></button>
+    </div>`}`);
+}
+
+function pickT18(id) {
+  const s = G.state, a = s.attrs;
+  if (s.flags.t18Done || s.ap < 1) return;
+  if (id === 'family' && s.flags.estranged) return;
+  s.ap -= 1;
+  if (id === 'family') { a.family += 1; a.stress -= 8; }
+  else if (id === 'health') { a.health += 5; a.stress -= 8; }
+  else { a.influence += 6; a.stress -= 3; }
+  a.health = Math.max(0, Math.min(100, a.health));
+  a.stress = Math.max(0, a.stress);
+  s.flags.t18Done = true;
+  s.flags.t18Choice = id;
+  s.yearActions = s.yearActions || [];
+  s.yearActions.push({ family: '陪家人/伴侣吃顿饭', health: '好好睡一觉，去体检', write: '把这 18 年写下来' }[id]);
+  autosave('T18 最后一件想做的事');
+  screenT18();
+}
+
+const ENDING_NAMES = { fulfilled: '如愿', 'another-way': '换了一种如愿', survived: '活下来了', restart: '重开' };
+const ENDING_TEXT = {
+  fulfilled: '你走成了原来想走的那条路。',
+  'another-way': '你没走成原来那条路，但你走成了另一条——这也算赢。',
+  survived: '没如愿，但你活下来了。活下来本身，就是一条路。',
+  restart: '这一局没有走到你想要的地方。可以再来一次，换一条路走走。',
+};
+
+function screenSettlement() {
+  const s = G.state;
+  const sc = obsessionScore(s);
+  if (!s.flags.settled) {
+    s.flags.settled = true;
+    s.finished = true;
+    G.meta.runsFinished = (G.meta.runsFinished || 0) + 1;
+    saveMeta(G.meta);
+    // 结算统计事件（SPEC：只发执念达成度 + 结局类型，枚举与数字，
+    // 不发自由文本）。ANALYTICS_ENDPOINT 为空时是空操作。
+    Analytics.track('settlement', { obsessionScore: sc.total, ending: sc.ending });
+    autosave('35 岁结算完成');
+  }
+  const rows = (s.obsessions || []).map((id) => {
+    const o = OBSESSIONS.find((x) => x.id === id) || { name: id };
+    return `<p><b>${esc(o.name)}</b>：${sc.per[id] ?? 0} / 3 分</p>`;
+  }).join('') || '<p>开局没选执念。这一局没有打分对象。</p>';
+  const ded = [];
+  if (sc.deductions.health) ded.push(`健康 ≤20，−${sc.deductions.health}`);
+  if (sc.deductions.debt) ded.push(`Debt 到顶，−${sc.deductions.debt}`);
+  if (sc.deductions.estranged) ded.push(`断亲且执念含家庭，−${sc.deductions.estranged}`);
+  setScreen(`
+    <h1>35 岁 · 结算</h1>
+    <div class="card"><h2>${ENDING_NAMES[sc.ending]}（${sc.total} 分）</h2><p>${ENDING_TEXT[sc.ending]}</p></div>
+    <div class="card"><h2>执念达成度</h2>${rows}
+      <p>小计 ${sc.raw} 分${ded.length ? ' − 代价：' + ded.join('、') : '，无代价扣除'} → <b>${sc.total} 分</b></p>
+      <p class="muted">评分细则是按终局状态的解释性实现（文档未给细则）：money 看现金档、seen 看影响力、home 看家庭线、free 看 Debt/压力、love 看伴侣状态、health 看健康。见 engine.js obsessionScore 注释。</p></div>
+    <div class="card"><h2>最后的状态</h2>
+      <p>钱 ${s.attrs.money} 万 · 健康 ${s.attrs.health} · 压力 ${s.attrs.stress}（${pressureTier(s.attrs.stress).name}）· 家庭线 ${s.attrs.family} · Debt ${s.attrs.debt} · 影响力 ${s.attrs.influence}</p>
+      <p class="muted">执念：${s.obsessions.map((id) => (OBSESSIONS.find((o) => o.id === id) || {}).name).join('、') || '未选'} · 难度：${DIFFICULTIES[s.difficulty].name}${(s.difficulty === 'hard' || s.difficulty === 'nightmare') ? '（你选了更难的那条）' : ''}</p>
+      ${s.flags.acceptedFate ? '<p>18 岁那年，你选择保留命运给你的起点。此后，你走出了属于自己的路。</p>' : ''}
+      <p class="muted">图鉴里攒了 ${(s.lessons || []).length} 张教训卡（只继承信息，不继承数值）。</p></div>
+    <div class="actions">
+      <button class="primary" data-act="restart">再来一次（解锁 S4 改写）</button>
+      <button data-act="export">导出存档码</button>
+      <button data-act="title">回到标题</button>
+    </div>`);
 }
 
 // ---------- T5 / T6 key years ----------
@@ -1207,8 +1821,8 @@ function pickSlice(i) {
 
 function sliceEnd() {
   const s = G.state;
-  G.meta.runsFinished = (G.meta.runsFinished || 0) + 1;
-  saveMeta(G.meta);
+  // v1.0: T9 不是终点，run 不在这里结束——runsFinished 只在 35 岁结算
+  // 时 +1（见 screenSettlement）。“再来一次”也只在结算后出现。
   // v0.8: slice outcome as an enum (laid off / kept / kept via transfer).
   const h2s = s.flags.h2;
   const hrTalk = s.decisions['hr-talk'];
@@ -1256,9 +1870,9 @@ function sliceEnd() {
       <p>钱 ${s.attrs.money} 万 · 健康 ${s.attrs.health} · 压力 ${s.attrs.stress}（${pressureTier(s.attrs.stress).name}）· 家庭线 ${s.attrs.family} · Debt ${s.attrs.debt}</p>
       <p class="muted">执念：${s.obsessions.map((id) => (OBSESSIONS.find((o) => o.id === id) || {}).name).join('、') || '未选'}</p>
     </div>
-    <p class="muted">下一版：T10–T18 完整年度循环、承诺 C/D/E/F 兑现卡、35 岁结算与「再来一次」（解锁 S4 改写入口与并行周目位）。</p>
+    <p class="muted">承诺 C（裁员应对）兑现从 T10 开始。35 岁结算后才出现「再来一次」（解锁 S4 改写入口与并行周目位）——结算前没有改写入口。</p>
     <div class="actions">
-      <button class="primary" data-act="restart">再来一次（解锁 S4 改写）</button>
+      <button class="primary" data-act="year-next" data-id="10">进入 T10 · 27 岁</button>
       <button data-act="export">导出存档码</button>
       <button data-act="title">回到标题</button>
     </div>`);
@@ -1413,6 +2027,8 @@ document.addEventListener('click', (e) => {
       if (s.turn === 0) screenDice();
       else if (s.turn === 1) screenT1();
       else if (s.turn === 9) enterSlice(false);
+      else if (s.finished) screenSettlement();
+      else if (s.turn === 18) screenT18();
       else startYear(s.turn);
       break;
     }
@@ -1629,6 +2245,20 @@ document.addEventListener('click', (e) => {
     case 'shengben-year': if (attemptShengben(G.state, G.rng, 1)) startYearRefresh(); break;
     case 'transfer-major': if (attemptTransferMajor(G.state, G.rng)) startYearRefresh(); break;
     case 't6-pick': pickT6(id); break;
+    case 't12-pick': pickT12(id); break;
+    case 't14-pick': pickT14(id); break;
+    case 't16-pick': pickT16(id); break;
+    case 't18-pick': pickT18(id); break;
+    case 't18-settle': screenSettlement(); break;
+    case 'h5-checkup': {
+      const s = G.state;
+      if (s.turn !== 13 || s.flags.h5Checkup || s.ap < 1) break;
+      s.ap -= 1;
+      s.flags.h5Checkup = true;
+      autosave('带父母体检完成');
+      startYearRefresh();
+      break;
+    }
     case 'to-slice': enterSlice(false); break;
     case 'slice-pick': pickSlice(Number(id)); break;
     case 'slice-next':
