@@ -121,6 +121,20 @@ Allen 2026-11-17 04:13 截图报的 bug：“和父母要钱买上海的房子�
 
 测试：`~/workspace/hackathon-tracker/qilu-huakai-tests/test-v10.js`（NONVENTURE-01..32：四类守门、创业关键词优先、买房出租/旅游号/留学中介不误拦、分类器本身未动、AI 的 none 结论与申诉覆盖、确认屏三态、过期确认点不开线、月球奶茶店回归）全过；v02–v09 回归全过。P1 本来要用 test-v10.js，顺延到 test-v11.js。
 
+## 本版范围（v0.8，匿名游玩统计：只发枚举，不记身份）
+
+Allen 2026-11-17 13:53 定：做匿名游玩统计，放华为云试水服务器（华东-上海一 ecs-d370，2 核 4G，Ubuntu 22.04，40G，1M 公网带宽，60.204.250.59，包月 1 个月约 12-17 到期）上。排行榜与云存档不做：榜单没设计过且前端分数可改、不可信；云存档与评委免登录的设计冲突。
+
+隐私口径（写死）：只发枚举与数字——难度、出生年、高考年、省份、执念条数、回合数、承诺卡/选项 id、创业线 archetype id、结局枚举；绝不发自由文本（创业点子原文、任何玩家输入都不上传）。客户端标识只是 localStorage 里的随机串，与账号无关；服务端不记 IP、不写访问日志。默认开启，页脚可一键停止发送（`qilu_analytics_off=1`），离线或接口不通时静默失败，游戏照常玩。
+
+事件：`session_start`（S0.5 后配置齐时发一次，诊断面板重渲染不重发）、`turn_start`（每回合，T9 切片进场也发）、`commitment`（A/B 签署）、`venture_start`（开线，只发 archetype id）、`venture_year`（年度结算前后状态对比推导：running / validating / validated / milestone / milestone_failed / launched / idle / closed）、`year_end`（tier）、`slice`（laid_off / kept / kept_transfer / unknown）；`settlement` 已占位，T10–T18 建好后接。
+
+服务端：`~/workspace/hackathon-tracker/qilu-huakai-analytics/server/analytics_server.py`（Python 3 标准库 only，http.server + sqlite3，零 pip 依赖），`POST /v1/event`（body ≤ 4KB，白名单事件名，多余字段丢弃，非法回 202 不重试）、`GET /v1/stats`（只给聚合，不暴露原始行）、`GET /health`；systemd 服务 `qilu-analytics` 绑 127.0.0.1:8000。游戏在 GitHub Pages 上是 https，裸 IP + http 会被浏览器以混合内容拦下，所以公网入口走 Cloudflare Quick Tunnel（零新账号，地址随重启变，变了就改游戏里一行 `ANALYTICS_ENDPOINT` 再推）；长期稳定地址走 DuckDNS 免费子域名 + Caddy（要 Allen 点头注册）。`ANALYTICS_ENDPOINT` 为空时上报是空操作，所以游戏端可以先推，等隧道地址下来再填地址推一次。部署脚本与 unit 文件在同一 server 目录（`deploy.sh`，等 Allen 设好服务器密码、能 SSH 后再跑）。
+
+测试：`~/workspace/hackathon-tracker/qilu-huakai-tests/test-analytics.js`（ANALYTICS-01..20：端点为空零发送、未知事件不发、opt-out 开关、client id 跨 init 稳定、页脚开关翻转、session_start 一次、turn/commitment/venture/year_end/slice 钩子字段齐全、无自由文本）全过；v02–v10 回归全过（九个旧测试文件的加载列表补了 analytics.js——game.js 现在调它，不加载会报未定义；这是本次唯一一次回归失败原因，已修）。
+
+取数：服务器约 12-17 到期，12-14（周一）早上提醒取数据：`GET /v1/stats` 看聚合 + `sqlite3 events.db .dump` 拷原始表；云备份 vault-b9f9 按周自动备。
+
 ## License
 
 MIT. See `LICENSE`.

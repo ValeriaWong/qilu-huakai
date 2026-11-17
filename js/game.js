@@ -478,6 +478,20 @@ function pickT1Region(regionId) {
 function screenT1() {
   const s = G.state;
   s.turn = 1; s.ap = 3;
+  // v0.8: anonymous analytics. Config is complete here (era + region +
+  // difficulty + obsessions). Once per run: the diagnosis panel re-renders
+  // this screen, and a reload must not count a second session.
+  if (!s.flags.analyticsSessionSent) {
+    s.flags.analyticsSessionSent = true;
+    Analytics.track('session_start', {
+      difficulty: s.difficulty,
+      birthYear: s.flags.era ? s.flags.era.birthYear : undefined,
+      examYear: s.flags.era ? s.flags.era.examYear : undefined,
+      region: s.flags.gaokao ? s.flags.gaokao.region : undefined,
+      obsessions: (s.obsessions || []).length,
+    });
+  }
+  Analytics.track('turn_start', { turn: 1 });
   // v0.5: no Gaokao record yet -> pick a region first; the score is
   // rolled when the region is picked (region-relative, see pickT1Region).
   if (!s.flags.gaokao) { screenT1Region(); return; }
@@ -659,6 +673,7 @@ function pickT1(choice) {
     snapshot: { skill: a.skill, express: a.express, network: a.network, family: a.family, k: adm.k, major: adm.major, tier: adm.tier },
   };
   autosave('承诺 A 已签署并封存');
+  Analytics.track('commitment', { card: 'A', choice });
   setScreen(`
     <h1>承诺卡 A 已签署</h1>
     <div class="card"><p>你的专业：<b>${esc(adm.major)}</b>（${stance} · ${adm.tier}）。专业系数 k = ${adm.k}，T2–T4 兑现，T5 回顾。骰子已封存，兑现时只读档、不重掷。</p>
@@ -777,6 +792,7 @@ function ventureActionHtml(s) {
 function startYear(turn) {
   const s = G.state;
   s.turn = turn;
+  Analytics.track('turn_start', { turn });
   s.ap = 3 - (s.flags.nextYearApPenalty || 0);
   if (s.flags.nextYearApPenalty) s.flags.nextYearApPenalty = 0;
   if (s.flags.selfFunded && turn >= 2 && turn <= 5) s.ap -= 1; // 自挣学费（A 卡兑现窗口 T2–T4，v0.7 设计为 T2–T5 四年；T5 无行动环节，实际扣 T2–T4）
@@ -884,6 +900,10 @@ function endYear() {
   // Ventures resolve before the yearly settlement: running lines pay
   // passively; the line the player pushed this year rolls its milestone.
   const ventureLines = [];
+  // v0.8: snapshot venture states before the yearly resolve, so the
+  // analytics outcome is derived from before/after, not from text.
+  const ventureBefore = new Map((s.ventures || []).map((v) => [v.id, { status: v.status, stage: v.stage }]));
+  const advancedId = s.flags.advancedVenture;
   for (const v of (s.ventures || [])) {
     const arch = VENTURE_ARCHETYPES.find((a) => a.id === v.archetype);
     if (!arch) continue;
@@ -892,6 +912,21 @@ function endYear() {
   s.flags.advancedVenture = null;
   s.rngState = G.rng.getState();
   const res = settleYear(s, DIFFICULTIES[s.difficulty]);
+  Analytics.track('year_end', { turn: s.turn, tier: res.tier });
+  for (const v of (s.ventures || [])) {
+    const before = ventureBefore.get(v.id);
+    if (!before || before.status === 'closed') continue;
+    let outcome;
+    if (before.status === 'running') outcome = 'running';
+    else if (before.status === 'validating') outcome = v.status === 'active' ? 'validated' : 'validating';
+    else if (before.status === 'active') {
+      if (v.status === 'running') outcome = 'launched';
+      else if (v.stage > before.stage) outcome = 'milestone';
+      else if (v.status === 'closed') outcome = 'closed';
+      else outcome = advancedId === v.id ? 'milestone_failed' : 'idle';
+    } else continue;
+    Analytics.track('venture_year', { archetype: v.archetype, outcome });
+  }
   const a = s.attrs;
   const brief = `${17 + s.turn} 岁这一年，你${s.yearActions.join('、') || '没做什么特别的事'}。${s.flags.eventChoice || ''}`;
   s.yearlyLog.push({ turn: s.turn, type: 'settle', text: brief });
@@ -934,6 +969,7 @@ function pickT5(id) {
   s.flags.housing = 'rent';
   s.commitments.B = { text: '第一份工作：' + j.name, signedAt: 'T5', dueTurn: 6, snapshot: { ...s.attrs } };
   autosave('承诺 B 已签署');
+  Analytics.track('commitment', { card: 'B', choice: id });
   setScreen(`
     <h1>承诺卡 B 已签署</h1>
     <div class="card"><p>你去了${j.name}。这条线的 NPC 池已经换了——接下来几年遇到的人，大多从这里来。</p></div>
@@ -997,6 +1033,7 @@ function enterSlice(direct) {
     s.rngState = G.rng.getState();
   }
   s.turn = 9; s.ap = 3;
+  Analytics.track('turn_start', { turn: 9 });
   s.sliceStart = Date.now();
   s.sliceStep = 0;
   autosave('进入 T9 切片');
@@ -1073,6 +1110,11 @@ function sliceEnd() {
   const s = G.state;
   G.meta.runsFinished = (G.meta.runsFinished || 0) + 1;
   saveMeta(G.meta);
+  // v0.8: slice outcome as an enum (laid off / kept / kept via transfer).
+  const h2s = s.flags.h2;
+  const hrTalk = s.decisions['hr-talk'];
+  const triedTransfer = !!(hrTalk && hrTalk.text.includes('转岗'));
+  Analytics.track('slice', { outcome: !h2s ? 'unknown' : h2s.laidOff ? 'laid_off' : triedTransfer ? 'kept_transfer' : 'kept' });
   // H2 resolution: the layoff die was sealed on entering the slice — read
   // it here and apply the compensation. N = 工龄 4 年 × 月薪 2 万 = 8 万；
   // the +1 代通知金 depends on the dismissal ground, so it is NOT automatic.
@@ -1372,6 +1414,7 @@ document.addEventListener('click', (e) => {
       const r = startVenture(G.state, text, arch, opts);
       if (!r.ok) { alert(r.error); break; }
       const vv = r.venture;
+      Analytics.track('venture_start', { archetype: arch.id });
       G.state.flags.eventChoice = '赚钱点子 → 开始了「' + vv.name + '」';
       G.state.omenLog.push({ turn: G.state.turn, text: '你写下第一行计划的那天晚上，停电了。' });
       autosave('专属线已生成');
@@ -1406,6 +1449,7 @@ document.addEventListener('click', (e) => {
       const r = startVenture(G.state, text, arch, opts);
       if (!r.ok) { alert(r.error); break; }
       const vv = r.venture;
+      Analytics.track('venture_start', { archetype: arch.id });
       G.state.flags.eventChoice = '赚钱点子 → 开始验证「' + vv.name + '」';
       autosave('验证已开始');
       setScreen(`
@@ -1477,14 +1521,33 @@ document.addEventListener('click', (e) => {
     case 'reset':
       if (confirm('清除本地存档与周目记录，回到标题？')) { clearSave(); localStorage.removeItem(META_KEY); G.meta = loadMeta(); screenTitle(); }
       break;
+    case 'analytics-toggle': {
+      const off = !Analytics.optedOut();
+      Analytics.setOptOut(off);
+      refreshAnalyticsNote();
+      break;
+    }
     case 'back': screenTitle(); break;
     case 'title': screenTitle(); break;
   }
 });
 
+function refreshAnalyticsNote() {
+  const note = document.querySelector('#analytics-note');
+  const btn = document.querySelector('#analytics-toggle');
+  if (!note || !btn) return;
+  const off = Analytics.optedOut();
+  note.textContent = off
+    ? '匿名游玩统计已停止，不会发送任何数据。'
+    : '匿名游玩统计已开启：只发回合与选项编号，不含任何个人信息、不记 IP。';
+  btn.textContent = off ? '重新开启' : '停止发送';
+}
+
 function init() {
+  Analytics.init();
   G = { state: null, rng: null, meta: loadMeta(), pickedObsessions: new Set(), pickedDifficulty: 'normal', pickedSlot: 1 };
   screenTitle();
+  refreshAnalyticsNote();
 }
 
 document.addEventListener('DOMContentLoaded', init);
