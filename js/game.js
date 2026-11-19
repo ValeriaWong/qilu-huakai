@@ -506,6 +506,9 @@ function pickT1Region(regionId) {
 function screenT1() {
   const s = G.state;
   s.turn = 1;
+  // v1.4 (P0-1): A 卡已签署时只看已签卡，不重进填报屏——否则刷新/
+  // 继续回 T1 还能再签一次 A，钱、家庭线、k 全重算一遍。
+  if (s.commitments.A) { showT1Signed(s); return; }
   // v1.2 (P0-1): T1 的 AP 只在首次进入时赋值；诊断面板开关、刷新、
   // 重进都不重置它。
   if (!s.flags.t1Entered) { s.flags.t1Entered = true; s.ap = 3; }
@@ -595,6 +598,22 @@ function screenT1() {
   const inp = $('#t1-major');
   if (inp) inp.addEventListener('input', () => { G.t1MajorDraft = inp.value; updateT1MajorLine(); });
   updateT1MajorLine();
+}
+
+// v1.4 (P0-1): A 卡已签署的只读屏——恢复/刷新回到 T1 时只看这张卡，
+// 不重进填报。落榜且还没选去向时，仍给出去向选择（复读 / 专科补录 /
+// 工作 / 调剂校外），选完才进 T2；去向已选则直接进 T2。
+function showT1Signed(s) {
+  const a = s.commitments.A;
+  const failed = s.major && s.major.tier === '落榜';
+  setScreen(`
+    <h1>承诺卡 A 已签署</h1>
+    <div class="card"><p>${a ? esc(a.text) : ''}</p>
+    <p>你的专业：<b>${esc(s.major ? s.major.name : '')}</b>（${esc(s.major ? s.major.tier : '')}）。专业系数 k = ${s.flags.majorK}，T2–T4 兑现，T5 回顾。骰子已封存，兑现时只读档、不重掷。</p>
+    <p class="muted">征兆已记下，兑现那天会拿出来对照：你当时收到过什么信号、忽略了什么。</p></div>
+    ${failed && !s.flags.fallbackChoice
+      ? `<div class="actions"><button class="primary" data-act="t1-fallback" data-id="repeat">复读一年</button><button data-act="t1-fallback" data-id="vocational">等专科补录</button><button data-act="t1-fallback" data-id="work">先工作一年</button><button data-act="t1-fallback" data-id="offcampus">调剂校外（降一档，k −0.15）</button></div>`
+      : `<div class="actions"><button class="primary" data-act="year-start">进入 T2 · 19 岁</button></div>`}`);
 }
 
 // Live feedback for the typed/picked major: its reference line vs the score.
@@ -694,6 +713,8 @@ function draftT1(choice) {
 
 function pickT1(choice) {
   const s = G.state, a = s.attrs;
+  // v1.4 (P0-1): A 卡已签署，再点提交确认也不重算（旧按钮/重复点击）。
+  if (s.commitments.A) { showT1Signed(s); return; }
   // P1 (d) v1.1: only the explicit 提交确认 (t1-confirm) confirms the
   // player's own填报 — the remedy window for an H0 tamper closes here,
   // not on the draft pick. Draft-only players are still exposed.
@@ -982,6 +1003,9 @@ function enterYear(turn) {
   if (turn === 13 && !s.sealed.H5) {
     const care = careSubjectFor(s);
     s.flags.careSubject = care.kind;
+    // v1.4 (P0-2): 照护对象随 H5 一起封存（sealedCareSubject）——
+    // T16 只读封存记录，不再按当前关系重算。
+    s.flags.sealedCareSubject = care.kind;
     if (care.kind !== 'none') {
       sealDie(s, rng, 'H5', rng.int(1, 3), 3);
       s.rngState = rng.getState();
@@ -1237,14 +1261,15 @@ function cRevealCardHtml(s) {
 // ---------- v1.2 (P0-3): H5 体检（T13，1 AP），照护对象是谁就带谁 ----------
 function h5SignHtml(s) {
   if (s.turn !== 13 || !s.sealed.H5) return '';
-  const care = careSubjectFor(s);
+  // v1.4 (P0-2): 体检卡也读封存对象。
+  const care = sealedCareSubject(s);
   const who = care.kind === 'self' ? '自己' : care.label;
   return `<div class="card"><h2>${esc(care.label)}的身体 · 已封存</h2><p>征兆：${esc(s.sealed.H5.omens.map((o) => o.text).join(' '))}</p><p class="muted">这颗骰在你 30 岁那年掷出，T16 兑现。带${esc(who)}体检（1 AP）可让等级 −1。</p></div>`;
 }
 
 function h5CheckupHtml(s) {
   if (s.turn !== 13 || !s.sealed.H5 || s.flags.h5Checkup) return '';
-  const care = careSubjectFor(s);
+  const care = sealedCareSubject(s);
   const verb = care.kind === 'self' ? '自己去体检' : `带${care.label}去体检`;
   return `<div class="card"><h2>${verb}</h2><button class="opt" data-act="h5-checkup" ${s.ap < 1 ? 'disabled' : ''}><b>${verb}</b><span>1 AP。T13 才能做：${esc(care.label)}病情等级 −1（T16 兑现时算）。${s.ap < 1 ? '（AP 不够）' : ''}</span></button></div>`;
 }
@@ -1412,8 +1437,16 @@ function screenDrill(topicId) {
   const npc = NPCS.find((n) => n.id === t.npc) || NPCS[0];
   const mem = npcMemoryFor(t.npc);
   G.drill = { topic: t.id, npcId: t.npc };
-  if (t.id === 'en-interview') return screenEnInterview();
-  if (t.id === 'voice') return screenVoiceInterview();
+  // v1.4：三问已完成时从演练入口重新进，状态清零、从 Q1 重练（不
+  // 直接停在总结页上，也不在总结页里再循环回 Q1）。
+  if (t.id === 'en-interview') {
+    if (G.drillEnDone) { G.drillEnQ = 0; G.drillEnResults = []; G.drillEnFeedback = null; G.drillEnDone = false; }
+    return screenEnInterview();
+  }
+  if (t.id === 'voice') {
+    if (G.drillVoiceDone) { G.drillVoiceQ = 0; G.drillVoiceResults = []; G.drillVoiceFeedback = null; G.drillVoiceDone = false; }
+    return screenVoiceInterview();
+  }
   const history = (mem.history || []).filter((h) => h.topic === t.id).slice(-3);
   const histHtml = history.map((h) => `<p>你：${esc(h.playerText)}</p><p>${esc(npc.name)}：${esc(h.npcReply)}</p>`).join('');
   setScreen(`
@@ -1462,6 +1495,35 @@ function screenVoiceInterview() {
     <p><button class="opt" data-act="drill-voice-start" ${avail ? '' : 'disabled'}>开始语音回答</button> <button class="opt" data-act="drill-voice-send">发送回答</button></p>
     <p id="drill-voice-status" class="muted">${avail ? '' : '这台设备 / 浏览器不支持语音识别，已自动转文字输入：直接在上面打字回答，一样有反馈。'}</p></div>
     <div class="actions"><button data-act="drill-back">返回</button></div>`);
+}
+
+// ---------- v1.4: 面试三问完成 · 总结页 ----------
+// Q3 发送后不再循环回 Q1：总分（/9）+ 每问的分项建议 + 再次练习
+// 入口。英文面试与语音面试共用同一套结构，只换标题与重试动作。
+function drillSummaryVerdict(total) {
+  if (total >= 8) return '三问都很扎实：答案完整、有具体成果、结构清楚。';
+  if (total >= 5) return '整体过关：再练一练“具体成果 + 结构”这两点，分数还能往上走。';
+  return '先练两点：每问都加一个具体成果（数字或结果），再按 first → then → result 的结构讲。';
+}
+function screenEnSummary() {
+  const npc = NPCS.find((n) => n.id === 'interviewer');
+  const results = G.drillEnResults || [];
+  const total = results.reduce((t, r) => t + r.score, 0);
+  setScreen(`
+    <h1>演练 · 英文面试 · 三问完成</h1>
+    <div class="card"><p><b>${esc(npc.name)}</b>（${esc(npc.role)}）</p><p>总分 <b>${total} / 9</b>。${esc(drillSummaryVerdict(total))}</p></div>
+    ${results.map((r) => `<div class="card"><h2>Q${r.q + 1} · ${r.score} / 3</h2><p>${esc(EN_INTERVIEW_QUESTIONS[r.q])}</p><p>${r.lines.map((l) => esc(l)).join('<br>')}</p></div>`).join('')}
+    <div class="actions"><button class="primary" data-act="drill-en-retry">再练一次</button><button data-act="drill-back">返回演练</button></div>`);
+}
+function screenVoiceSummary() {
+  const npc = NPCS.find((n) => n.id === 'interviewer');
+  const results = G.drillVoiceResults || [];
+  const total = results.reduce((t, r) => t + r.score, 0);
+  setScreen(`
+    <h1>演练 · 语音面试 · 三问完成</h1>
+    <div class="card"><p><b>${esc(npc.name)}</b>（${esc(npc.role)}）</p><p>总分 <b>${total} / 9</b>。${esc(drillSummaryVerdict(total))}</p></div>
+    ${results.map((r) => `<div class="card"><h2>Q${r.q + 1} · ${r.score} / 3</h2><p>${esc(EN_INTERVIEW_QUESTIONS[r.q])}</p><p>${r.lines.map((l) => esc(l)).join('<br>')}</p></div>`).join('')}
+    <div class="actions"><button class="primary" data-act="drill-voice-retry">再练一次</button><button data-act="drill-back">返回演练</button></div>`);
 }
 
 // ---------- v1.0: 承诺兑现卡（五格）----------
@@ -1536,8 +1598,8 @@ function redemptionCardHtml(s, id) {
     const h5 = s.flags.h5Result || {};
     const fr = s.flags.fResult || {};
     // v1.2 (P0-3): 照护对象是谁，卡上就写谁——父母 / 奶奶 / 伴侣 /
-    // 你自己的身体，不再默认“父母病情”。
-    const care = careSubjectFor(s);
+    // 你自己的身体，不再默认“父母病情”。v1.4：读封存对象。
+    const care = sealedCareSubject(s);
     const subjectLabel = care.label;
     const metNames = { money: '钱 ≥30 万', partner: '有伴侣支持', health: '健康 ≥60' };
     const metText = (fr.met || []).map((m) => metNames[m]).join('、') || '三项都没够上';
@@ -1557,17 +1619,32 @@ function redemptionCardHtml(s, id) {
 // 结婚本身不扣钱——花钱由下面的具体财务选择定（婚礼 / 购房 / 迁居 /
 // 不花）；断亲不删除陪伴行动（改成陪伴侣 / 朋友），不默认永久失去
 // 建立支持网络的能力。草稿存在 G.t12Intimate / G.t12Boundary /
-// G.t12Cost，点“签字确认”才落进承诺 D。
+// G.t12Cost / G.t12Scope，点“签字确认”才落进承诺 D。
+// ---- v1.4 (断亲目标拆分，第二次复审第四节）：断亲不再默认切断
+// 整个原生家庭线，拆成三个目标：parents（只断父母关系）、caregiver
+// （只断实际养育者）、all（与整个原生家庭断联）。父母与养育者是
+// 两条线的出身只有双缺席（奶奶抚养）；其他出身里父母就是养育者，
+// 断亲即全断（目标自动为 all）。家庭线归零 / 自主 +2 / 压力恢复
+// −3/年是断亲本身的代价，三个目标都一样；目标只决定照护对象与
+// 相关事件的去留（careSubjectFor / estrangementScope，见 engine.js）。
+// 旧存档没有 estrangedScope 时按 'all' 处理（v1.3 行为不变）。
+const T12_SCOPE_LABELS = { parents: '只与父母断联', caregiver: '只与奶奶断联', all: '与整个原生家庭断联' };
 function screenT12() {
   const s = G.state;
   if (s.commitments.D) { showT12Signed(s); return; }
   const intimate = G.t12Intimate || null;
   const boundary = G.t12Boundary || null;
   const cost = G.t12Cost || 'none';
+  const scope = G.t12Scope || null;
+  const isAbsentBoth = s.origin && s.origin.familyKey === 'absentBoth';
   const intLabel = intimate === 'partner' ? '和伴侣定下来（结婚）' : intimate === 'single' ? '单身' : '未选';
   const bndLabel = boundary === 'close' ? '保持亲近' : boundary === 'limited' ? '有限联系' : boundary === 'estranged' ? '断亲' : '未选';
+  const scopeLabel = scope ? T12_SCOPE_LABELS[scope] : '未选';
   const costLabel = cost === 'wedding' ? '办婚礼（−12 万）' : cost === 'house' ? '买房（−30 万，开始还贷）' : cost === 'move' ? '迁居（−5 万）' : '不花这笔钱';
-  const canSign = intimate && boundary;
+  // 断亲要选目标才可签：双缺席出身必须明确选一个目标；其他出身
+  // 断亲即全断，目标自动为 all，不必再选。
+  const scopeReady = boundary !== 'estranged' || scope || !isAbsentBoth;
+  const canSign = intimate && boundary && scopeReady;
   setScreen(`
     <h1>T12 · 29 岁 · 关系锁定</h1>
     <p class="intro">这一格拆成两件事，各自定：伴侣关系（有没有人跟你过日子）与原生家庭边界（跟家里保持什么距离）。两件事互相独立——可以结婚且断亲，也可以单身且跟家里亲近。</p>
@@ -1590,8 +1667,15 @@ function screenT12() {
       <button class="opt" data-act="t12-boundary" data-id="limited"><b>有限联系</b><span>家庭线最高到 +1，过年过节才联系。不是断，是留了距离。</span></button>
       <button class="opt" data-act="t12-boundary" data-id="estranged"><b>断亲</b><span>家庭线永久归零；自主执念进度 +2；压力恢复 −3/年。但“陪伴”这条路不会消失——可以陪伴侣、陪朋友，照样建立支持网络。</span></button>
     </div>
-    <div class="card"><p>你现在选的是：伴侣关系「${intLabel}」· 原生家庭边界「${bndLabel}」${intimate === 'partner' ? '· 花钱「' + costLabel + '」' : ''}。</p>
-    ${canSign ? '<p><button class="opt" data-act="t12-confirm">签字确认（承诺 D）</button></p>' : '<p class="muted">两件事都选好，才能签字确认。</p>'}</div>
+    ${boundary === 'estranged' ? (isAbsentBoth ? `<h2>断亲的目标（只在断亲时选）</h2>
+    <p class="intro">断亲不再默认切断整个原生家庭线。你的出身是双亲缺席、奶奶抚养你长大——父母与奶奶是两条线，分开选。只断父母时，奶奶的照护（T13/T16）与相关事件保留。</p>
+    <div class="options">
+      <button class="opt" data-act="t12-scope" data-id="parents"><b>只与父母断联</b><span>只断父母这条线：奶奶仍是你的监护人，她的照护与相关事件保留。家庭线仍归零、压力恢复 −3/年——这是断亲本身的代价。</span></button>
+      <button class="opt" data-act="t12-scope" data-id="caregiver"><b>只与奶奶断联</b><span>只断与奶奶这条线：父母本就缺席，不再有他们的事件。</span></button>
+      <button class="opt" data-act="t12-scope" data-id="all"><b>与整个原生家庭断联</b><span>父母与奶奶都断：签署前请确认，这是最彻底的一种断法。奶奶的照护与相关事件一并消失。</span></button>
+    </div>` : `<p class="muted">你的出身里，父母就是实际抚养你的人——断亲即与整个原生家庭断联（父母线与养育者线是同一条线）。</p>`) : ''}
+    <div class="card"><p>你现在选的是：伴侣关系「${intLabel}」· 原生家庭边界「${bndLabel}」${boundary === 'estranged' ? '· 断亲目标「' + scopeLabel + '」' : ''}${intimate === 'partner' ? '· 花钱「' + costLabel + '」' : ''}。</p>
+    ${canSign ? '<p><button class="opt" data-act="t12-confirm">签字确认（承诺 D）</button></p>' : '<p class="muted">' + (boundary === 'estranged' && !scopeReady ? '断亲的目标还没选：上面三条里选一条，才能签字确认。' : '两件事都选好，才能签字确认。') + '</p>'}</div>
     <p class="muted">承诺 D（关系槽，T13–T18 持续兑现）：无骰，但 H4 决定 T14 押注时伴侣是否共担。</p>`);
 }
 
@@ -1600,12 +1684,15 @@ function showT12Signed(s) {
   const h4 = s.sealed.H4;
   const intimate = s.flags.intimateRelationship || (s.flags.relationship === 'partner' ? 'partner' : 'single');
   const boundary = s.flags.familyBoundary || (s.flags.estranged ? 'estranged' : 'close');
+  // v1.4：断亲目标写进已签卡；旧存档无此字段时按 'all'（v1.3 行为）。
+  const scope = s.flags.estrangedScope || 'all';
   setScreen(`
     <h1>承诺卡 D 已签署</h1>
     <div class="card"><p>${esc(d ? d.text : '')}</p>
-    <p>伴侣关系：${intimate === 'partner' ? '有伴侣（结婚）' : '单身'} · 原生家庭边界：${boundary === 'close' ? '保持亲近' : boundary === 'limited' ? '有限联系' : '断亲'}。</p>
+    <p>伴侣关系：${intimate === 'partner' ? '有伴侣（结婚）' : '单身'} · 原生家庭边界：${boundary === 'close' ? '保持亲近' : boundary === 'limited' ? '有限联系' : '断亲（' + T12_SCOPE_LABELS[scope] + '）'}。</p>
     ${h4 ? `<p>征兆：${esc(h4.omens.map((o) => o.text).join(' '))}</p><p class="muted">伴侣的真实想法已在签署时封存（H4，29 岁那年掷出）。他/她是否愿共担风险，T14 押注时见分晓——对外只看征兆，不看数字。</p>` : ''}
     ${s.flags.estranged ? '<p>家庭线已归零，压力恢复从此每年少 3 点。但“陪伴”这条路还在：可以陪伴侣、陪朋友，支持网络照样能建。</p>' : ''}
+    ${s.flags.estranged && scope === 'parents' ? '<p>只断了父母这条线：奶奶仍是你的监护人，她的照护（T13/T16）与相关事件保留。</p>' : ''}
     ${boundary === 'limited' ? '<p>有限联系：家庭线最高到 +1，过年过节才联系。</p>' : ''}
     <p class="muted">D 在 T13–T18 持续兑现：买房的 AP 代价落在 T13；伴侣共担落在 T14；有没有人陪你扛，落在 T16。</p></div>
     <div class="actions"><button class="primary" data-act="year-next" data-id="13">进入 T13 · 30 岁</button></div>`);
@@ -1631,18 +1718,21 @@ function signT12() {
   if (boundary === 'estranged') {
     a.family = 0;
     s.flags.estranged = true;
+    // v1.4：断亲目标落进存档（parents / caregiver / all）；双缺席
+    // 出身必选一个目标，其他出身断亲即全断，目标自动为 all。
+    s.flags.estrangedScope = G.t12Scope || 'all';
     s.flags.obsessionProgress = (s.flags.obsessionProgress || 0) + 2;
   } else if (boundary === 'limited') {
     s.flags.familyCapped = true;
     if (a.family > 1) a.family = 1;
   }
   const costText = cost === 'wedding' ? '，办婚礼 −12 万' : cost === 'house' ? '，买房 −30 万（开始还贷）' : cost === 'move' ? '，迁居 −5 万' : '';
-  const bndText = boundary === 'close' ? '与家里保持亲近' : boundary === 'limited' ? '与家里有限联系' : '断亲';
+  const bndText = boundary === 'close' ? '与家里保持亲近' : boundary === 'limited' ? '与家里有限联系' : '断亲（' + T12_SCOPE_LABELS[s.flags.estrangedScope || 'all'] + '）';
   s.commitments.D = { text: '关系槽：' + (intimate === 'partner' ? '伴侣（结婚' + costText + '）' : '单身') + ' · ' + bndText, signedAt: 'T12', dueTurn: 13, snapshot: { ...a } };
-  G.t12Intimate = null; G.t12Boundary = null; G.t12Cost = null;
+  G.t12Intimate = null; G.t12Boundary = null; G.t12Cost = null; G.t12Scope = null;
   s.rngState = G.rng.getState();
   autosave('承诺 D 已签署');
-  Analytics.track('commitment', { card: 'D', choice: intimate + '/' + boundary + '/' + cost });
+  Analytics.track('commitment', { card: 'D', choice: intimate + '/' + boundary + '/' + cost + (s.flags.estrangedScope ? '/' + s.flags.estrangedScope : '') });
   showT12Signed(s);
 }
 
@@ -1808,7 +1898,9 @@ function applyH5(s) {
   if (!s.sealed.H5) { s.flags.h5Result = null; return; }
   const lvl = h5Level(s);
   const a = s.attrs;
-  const kind = (s.flags && s.flags.careSubject) || careSubjectFor(s).kind;
+  // v1.4 (P0-2): 扣费读封存的照护对象，不按当前关系重算——T13 封存
+  // 伴侣、T16 伴侣离开，照护费照扣，UI 也照写伴侣的病。
+  const kind = sealedCareSubject(s).kind;
   if (kind === 'self') {
     if (lvl === 1) { a.health -= 10; a.stress += 15; }
     else if (lvl === 2) { a.health -= 20; a.stress += 30; }
@@ -1830,7 +1922,9 @@ function screenT16() {
   resolveE(s);
   applyH5(s);
   if (s.commitments.F) { showT16Signed(s); return; }
-  const care = careSubjectFor(s);
+  // v1.4 (P0-2): T16 只读 T13 封存的照护对象（sealedCareSubject），
+  // 不再调用 careSubjectFor(s) 按当前关系重算。
+  const care = sealedCareSubject(s);
   // v1.2 (P0-3): 没有有效照护对象——这一年没有人需要你照顾，不扣
   // 医疗费，不强制放弃任何东西。只看 E 的兑现卡，然后继续。
   if (care.kind === 'none' || !s.sealed.H5) {
@@ -1888,7 +1982,8 @@ function showT16Signed(s) {
 function pickT16(id) {
   const s = G.state, a = s.attrs;
   if (s.commitments.F) { showT16Signed(s); return; }
-  const care = careSubjectFor(s);
+  // v1.4 (P0-2): 照护方式的文案也读封存对象，与 T16 屏一致。
+  const care = sealedCareSubject(s);
   // 抗压判定读照护方式选定前的状态（H5 的账已在进 T16 时结过，
   // 照护方式的代价不应反过来改写判定本身）。
   const res = fResilience(s);
@@ -2025,6 +2120,9 @@ function t5EraLineHtml(s) {
 }
 function screenT5() {
   const s = G.state;
+  // v1.4 (P0-1): B 卡已签署时只看已签卡，不重进毕业去向选择——否则
+  // 刷新/继续回 T5 还能再签一次 B，入职现金奖励重发一遍。
+  if (s.commitments.B) { showT5Signed(s); return; }
   setScreen(`
     <h1>T5 · 22 岁 · 毕业去向</h1>
     <p class="intro">承诺卡 A（志愿）已在 T4 兑现——回头看，18 岁的选择把你带到了这里。你的专业是 <b>${esc(s.major ? s.major.name : '（旧存档，未记录）')}</b>${s.major && s.major.tier ? `（${esc(s.major.tier)}）` : ''}，专业系数 k = ${s.flags.majorK}，起点已定。同时签下承诺卡 B：第一份工作，锁定城市 × 行业，后续 80% 的机会只从这条线长出来。</p>
@@ -2035,8 +2133,22 @@ function screenT5() {
     <div class="options">${T5_JOBS.map((j) => `<button class="opt" data-act="t5-pick" data-id="${j.id}"><b>${j.name}</b><span>${j.desc} 钱 +${j.money} 万/年。</span></button>`).join('')}</div>`);
 }
 
+// v1.4 (P0-1): B 卡已签署的只读屏——恢复/刷新回到 T5 时只看这张卡
+// 和下一回合入口，不再允许重新选毕业去向、不重发入职奖励。
+function showT5Signed(s) {
+  const b = s.commitments.B;
+  setScreen(`
+    <h1>承诺卡 B 已签署</h1>
+    <div class="card"><p>${b ? esc(b.text) : ''}</p>
+    <p>入职奖励已在签署时发放，不会重复发放。</p></div>
+    <div class="actions"><button class="primary" data-act="year-start">进入 T6 · 23 岁</button></div>`);
+}
+
 function pickT5(id) {
   const s = G.state;
+  // v1.4 (P0-1): B 卡已签署，再点旧的去向按钮也不重进选择流程
+  // （screenT5 已守卫；这里防陈旧屏/重复派发的直接调用）。
+  if (s.commitments.B) { showT5Signed(s); return; }
   const j = T5_JOBS.find((x) => x.id === id);
   // v1.2 (P1-3): T5 分两步签——先选工作（公司性质），再选行业。
   // 钱 / 压力与承诺卡 B 都在行业选完才落定。
@@ -2077,6 +2189,8 @@ function pickT5Subsector(subId) {
 
 function signT5(j, sec, sub) {
   const s = G.state;
+  // v1.4 (P0-1): B 卡已签署，再走签署流程也不重发入职奖励。
+  if (s.commitments.B) { showT5Signed(s); return; }
   s.attrs.money += j.money;
   s.attrs.stress += j.stress;
   if (j.id === 'bigtech') s.flags.highPay = true;
@@ -2149,6 +2263,27 @@ function sliceDecisions(s) {
   }
   return T9_SLICE.decisions;
 }
+
+// ---- v1.4 (P1-3): 教培细分补填 ----
+// jobProfile 是教培但 subsector 为 null（旧存档迁移标 subsectorMissing
+// 后仍未补）时，H2 封存前请玩家补选。跳过 = 按未知细分继续，本次
+// 教培修正按 0 计（t9IndustryAdjustment 严格门控），不再追问。
+function jobProfileNeedsSubsector(s) {
+  const jp = s.flags && s.flags.jobProfile;
+  if (jp && (jp.sector === 'education' || jp.sectorName === '教培')) return !jp.subsector;
+  if (!jp && s.flags && s.flags.jobIndustry === '教培') return true;
+  return false;
+}
+function renderSliceSubsectorPrompt(s) {
+  const sec = SECTORS.find((x) => x.id === 'education');
+  setScreen(`
+    <h1>T9 · 26 岁 · 补填行业细分</h1>
+    <p class="intro">你的档案里写着“教培”，但没写是哪一类教培。双减政策修正只认学科类校外培训——补填一下，今晚的裁员判定才算得准。</p>
+    <div class="options">${sec.subsectors.map((sub) => `<button class="opt" data-act="slice-subsector-pick" data-id="${sub.id}"><b>${sub.name}</b><span>${sub.policyExposure ? '政策暴露：高（双减直接影响）。' : '政策暴露：低。'}</span></button>`).join('')}</div>
+    <p class="muted">也可以先不填：点“跳过，按未知细分继续”，本次教培修正按 0 计。</p>
+    <div class="actions"><button data-act="slice-subsector-skip">跳过，按未知细分继续</button></div>`);
+}
+
 function enterSlice(direct) {
   const s = G.state;
   // v1.2 (P0-1): 重进切片不重初始化——sliceStep、sliceStart、H2 都从
@@ -2185,8 +2320,12 @@ function enterSlice(direct) {
   // — the three decisions only shape the RESPONSE, never the outcome.
   // (Hidden: sealDie would leak omens, so store it raw on flags.)
   // A resumed slice keeps its original die.
-  // v1.2 (P0-7): H2 只作用于有真实雇佣关系的玩家。创业 / 读研 /
-  // 自由职业没有雇主，不掷 H2、不领补偿，走各自的危机分支。
+  // v1.4 (P1-3): 教培细分补填——旧存档的 jobProfile 没有 subsector
+  // 时，H2 封存前先请玩家补选；不补选不封 H2（不靠猜细分算修正）。
+  if (!s.flags.h2 && sliceBranch(s) === 'employed' && jobProfileNeedsSubsector(s) && s.flags.subsectorMissing !== false) {
+    renderSliceSubsectorPrompt(s);
+    return;
+  }
   if (!s.flags.h2 && sliceBranch(s) === 'employed') {
     if (s.flags.industryDown) s.flags.deptShrinking = true;
     const h2chance = layoffChance(s);
@@ -2916,7 +3055,16 @@ document.addEventListener('click', (e) => {
     case 'transfer-major': if (attemptTransferMajor(G.state, G.rng)) startYearRefresh(); break;
     case 't6-pick': pickT6(id); break;
     case 't12-intimate': G.t12Intimate = id; if (id === 'single') G.t12Cost = 'none'; screenT12(); break;
-    case 't12-boundary': G.t12Boundary = id; screenT12(); break;
+    case 't12-boundary': {
+      G.t12Boundary = id;
+      // v1.4：非双缺席出身里父母就是养育者，断亲即全断，目标自动为
+      // all；双缺席出身必须在屏上另选目标，否则不许签字。
+      if (id === 'estranged' && !(G.state.origin && G.state.origin.familyKey === 'absentBoth')) G.t12Scope = 'all';
+      else if (id !== 'estranged') G.t12Scope = null;
+      screenT12();
+      break;
+    }
+    case 't12-scope': G.t12Scope = id; screenT12(); break;
     case 't12-cost': G.t12Cost = id; screenT12(); break;
     case 't12-confirm': signT12(); break;
     case 't14-pick': pickT14(id); break;
@@ -2958,9 +3106,13 @@ document.addEventListener('click', (e) => {
       if (!text) { alert('先用英文写一句回答。'); break; }
       const fb = interviewEnFeedback(text);
       G.drillEnFeedback = fb;
+      G.drillEnResults = G.drillEnResults || [];
+      G.drillEnResults.push({ q: G.drillEnQ || 0, score: fb.score, lines: fb.lines });
       recordDrill('interviewer', 'en-interview', text, fb.lines.join(' '), fb.score >= 2 ? 3 : 0);
-      G.drillEnQ = ((G.drillEnQ || 0) + 1) % EN_INTERVIEW_QUESTIONS.length;
-      screenEnInterview();
+      // v1.4：Q3 发送后不再循环回 Q1，改为“三问完成”总结页。
+      const next = (G.drillEnQ || 0) + 1;
+      if (next >= EN_INTERVIEW_QUESTIONS.length) { G.drillEnDone = true; screenEnSummary(); }
+      else { G.drillEnQ = next; screenEnInterview(); }
       break;
     }
     case 'drill-voice-start': {
@@ -2991,8 +3143,23 @@ document.addEventListener('click', (e) => {
       if (!text) { alert('先写一句回答（语音识别或打字都行）。'); break; }
       const fb = interviewEnFeedback(text);
       G.drillVoiceFeedback = fb;
+      G.drillVoiceResults = G.drillVoiceResults || [];
+      G.drillVoiceResults.push({ q: G.drillVoiceQ || 0, score: fb.score, lines: fb.lines });
       recordDrill('interviewer', 'voice', text, fb.lines.join(' '), fb.score >= 2 ? 3 : 0);
-      G.drillVoiceQ = ((G.drillVoiceQ || 0) + 1) % EN_INTERVIEW_QUESTIONS.length;
+      // v1.4：Q3 发送后不再循环回 Q1，改为“三问完成”总结页。
+      const next = (G.drillVoiceQ || 0) + 1;
+      if (next >= EN_INTERVIEW_QUESTIONS.length) { G.drillVoiceDone = true; screenVoiceSummary(); }
+      else { G.drillVoiceQ = next; screenVoiceInterview(); }
+      break;
+    }
+    // v1.4：总结页的“再练一次”——状态清零，从 Q1 重练。
+    case 'drill-en-retry': {
+      G.drillEnQ = 0; G.drillEnResults = []; G.drillEnFeedback = null; G.drillEnDone = false;
+      screenEnInterview();
+      break;
+    }
+    case 'drill-voice-retry': {
+      G.drillVoiceQ = 0; G.drillVoiceResults = []; G.drillVoiceFeedback = null; G.drillVoiceDone = false;
       screenVoiceInterview();
       break;
     }
@@ -3001,13 +3168,32 @@ document.addEventListener('click', (e) => {
       if (s.turn !== 13 || s.flags.h5Checkup || s.ap < 1) break;
       s.ap -= 1;
       s.flags.h5Checkup = true;
-      const care = careSubjectFor(s);
+      const care = sealedCareSubject(s);
       autosave(care.kind === 'self' ? '自己体检完成' : '带' + care.label + '体检完成');
       startYearRefresh();
       break;
     }
     case 'to-slice': enterSlice(false); break;
     case 'slice-pick': pickSlice(Number(id)); break;
+    // v1.4 (P1-3): 教培细分补填。补选后写回 jobProfile 并重进切片
+    // （H2 此时才封存）；跳过则按未知细分继续，本次教培修正为 0。
+    case 'slice-subsector-pick': {
+      const s = G.state;
+      const jp = s.flags.jobProfile;
+      const sub = (SECTORS.find((x) => x.id === 'education') || { subsectors: [] }).subsectors.find((x) => x.id === id);
+      if (jp) { jp.subsector = sub ? sub.id : null; jp.policyExposure = sub ? !!sub.policyExposure : false; }
+      s.flags.subsectorMissing = false;
+      autosave('教培细分已补填');
+      enterSlice(false);
+      break;
+    }
+    case 'slice-subsector-skip': {
+      const s = G.state;
+      s.flags.subsectorMissing = false;
+      autosave('教培细分未填，按未知继续');
+      enterSlice(false);
+      break;
+    }
     case 'slice-next':
       G.state.sliceStep += 1;
       autosave(); // v1.2 (P0-1): 切片步骤推进即保存，重进恢复到这一步

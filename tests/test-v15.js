@@ -509,7 +509,7 @@ function refreshAndReenter(turn) {
 // ---------- P1-4: 年代权重（结构；数值表不动） ----------
 {
   check('V15-73 P1-4 Y table adjudicated: 2021 0, 2022 +3, 2023 0 (金融， I=0)', ctx(`t9H2Chance(0, 2021, '金融')`) === 20 && ctx(`t9H2Chance(0, 2022, '金融')`) === 23 && ctx(`t9H2Chance(0, 2023, '金融')`) === 20);
-  check('V15-74 P1-4 I table adjudicated: 教培 2021 +12, 互联网 2023 +3', ctx(`t9H2Chance(0, 2021, '教培')`) === 32 && ctx(`t9H2Chance(0, 2023, '互联网')`) === 23);
+  check('V15-74 P1-4 I table adjudicated: 教培学科 2021 +12, 互联网 2023 +3', ctx(`t9H2Chance(0, 2021, '教培', 'k12_subject_tutoring')`) === 32 && ctx(`t9H2Chance(0, 2023, '互联网')`) === 23);
   const F = ctx('({ civilServiceAppeal, civilServiceWeight, foreignFirmVisibility })');
   check('V15-75 P1-4 考公 2024-2026 appeal stays 78', F.civilServiceAppeal(2024) === 78 && F.civilServiceAppeal(2025) === 78 && F.civilServiceAppeal(2026) === 78 && F.civilServiceWeight(2025) === 0.78);
   check('V15-76 P1-4 外企 visibility adjudicated: 82 (2015/16) and 75 (2019/20)', F.foreignFirmVisibility(2015).weight === 82 && F.foreignFirmVisibility(2016).weight === 82 && F.foreignFirmVisibility(2019).weight === 75 && F.foreignFirmVisibility(2020).weight === 75);

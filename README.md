@@ -225,6 +225,18 @@ Allen 2026-11-20 00:23 定：WorkBuddy 机制评审必须完全通过，改到�
 
 测试：`~/workspace/hackathon-tracker/qilu-huakai-tests/test-v16.js` 76 项新增（V16-01..76：P0 每项 + P1 每项 + 存档兼容 + 65% 征兆 600 条）；`test-v11.js` 131 项、`test-v14.js` 39 项、`test-v15.js` 106 项（数值随裁定表更新）。全量回归 858 项全过（v02-regression 8、v03 33、v04 18、v05 26、v06 21、v07 18、v08 63、v09 52、v10 32、v11 131、v12 79、v13 136、v14 39、v15 106、v16 76、test-analytics 20；v1.2 基线 782）。
 
+## 本版范围（v1.4，ChatGPT 第二次终审复审 5 项；机制 only，不碰视觉）
+
+复审记录 `alipay-emerge-rpg-chatgpt-final-review-recheck2-20261120.md`（ChatGPT，2026-11-20 03:00，复审 v1.3；总体结论：不通过——9 项中 6 通过 / 3 未通过；复审方独立重跑全部 858 项测试 0 失败、征兆统计复现 708/1100 = 0.6436；Pages 仍读不到，演练用 DOM 模拟核验）。本版逐项落实复审第五节的 5 项（详见设计文档 v1.4 一节），不扩大范围、不动数值表。
+
+- P0-1 已签署不可重签：全部签署点统一加承诺已存在检查——`screenT1`/`screenT5`/`pickT1`/`pickT5`/`signT5` 在 A/B 卡已存在时只渲染已签只读屏（`showT1Signed`/`showT5Signed`：已签卡文 + 下一回合入口），不重进选择、不重算、不重发奖励；T12/T14/T16 的 screen/sign 守卫 v1.2/v1.3 已有，本轮回归确认。已签 A 且落榜、去向未选时，已签屏仍给出落榜去向选择（复读/专科补录/工作/调剂校外）——去向是 T1 的收尾，不是重签。旧存档同样遵守。
+- P0-2 照护对象封存：H5 在 T13 封存时一并封存照护对象（`flags.sealedCareSubject`，`engine.js` 的 `sealedCareSubject()` 读它；顺序：封存值 → v1.3 的 `flags.careSubject` → 现场重算）；T16 只读封存记录——`applyH5`、`screenT16`、`pickT16`、H5 体检卡、兑现卡 F、抗压判定 `fResilience` 全部改读封存值。后续关系变化可影响照护方式与关系后果，但不能让已发生的医疗事件凭空消失。旧存档迁移：已封存 H5 且无 `sealedCareSubject` 时从 `flags.careSubject` 回填（`migrateSave`，`loadGame`/`importCode` 都走）。
+- 断亲目标拆分：T12 断亲时另选目标（三选一）：`parents`（只与父母断联）、`caregiver`（只与实际养育者断联）、`all`（与整个原生家庭断联）。父母与养育者是两条线的出身只有双缺席（奶奶抚养）；其他出身里父母就是养育者，断亲即全断，目标自动为 `all`。双缺席出身不选目标不许签字；目标落进 `flags.estrangedScope`，已签 D 卡写明。`careSubjectFor` 按目标读：只断父母时奶奶照护对象与相关事件保留。家庭线归零 / 自主 +2 / 压力恢复 −3/年是断亲本身的代价，三个目标都一样；旧存档无 scope 按 `all`（v1.3 行为）。
+- P1-3 教培严格门控：`t9IndustryAdjustment` 改为只有 `k12_subject_tutoring` 命中（2021 +12 / 2022 +8 / 2023 +2），null/undefined/未知细分一律 0，素质/职业三年全 0。旧存档分类缺失在迁移层完成（`migrateSave` 标 `flags.subsectorMissing`，不猜细分；只有 `jobIndustry` 的旧存档先建空壳 `jobProfile` 再标缺失），T9 切片入口在 H2 封存前出补填屏（学科类/素质/职业三选一，或跳过按未知细分继续、本次修正 0、不再追问）。历史政策命中条件不放宽。
+- 英文面试总结页：Q3 发送后不再循环回 Q1，改为“三问完成”总结页（总分 /9、分项建议每问一卡、再次练习入口）；每问结果记进 `G.drillEnResults`/`G.drillVoiceResults`，演练入口重进已完成的三问时状态清零、从 Q1 重练。语音面试同样流程。只做这一页，不扩别的。
+
+测试：`~/workspace/hackathon-tracker/qilu-huakai-tests/test-v17.js` 49 项新增（V17-01..49：P0-1 11 项、P0-2 8 项、断亲拆分 10 项、P1-3 10 项、总结页 10 项）；`test-v05.js` 的 pickT1 三流程改从全新 state 开始（v1.4 之前三流程共用已签 A 的 state，正是 P0-1 堵的重签路径）；`test-v11.js`、`test-v15.js`、`test-v16.js` 的教培调用随严格门控更新（传 `k12_subject_tutoring`；V16-58 由“未定义取表值”翻转为“未定义返回 0”）。全量回归 907 项全过（v02-regression 8、v03 33、v04 18、v05 26、v06 21、v07 18、v08 63、v09 52、v10 32、v11 131、v12 79、v13 136、v14 39、v15 106、v16 76、v17 49、test-analytics 20；v1.3 基线 858）。65% 征兆固定种子统计不变（708/1100 = 0.6436）。
+
 ## License
 
 MIT. See `LICENSE`.

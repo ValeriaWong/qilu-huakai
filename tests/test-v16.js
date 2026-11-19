@@ -447,7 +447,7 @@ function ks(stance, network, mem) {
   const t9i = (year, industry, sub) => ctx(`t9IndustryAdjustment(${year}, '${industry}'${sub === undefined ? '' : `, '${sub}'`})`);
   check('V16-56 P1-3 2021 教培：学科 +12，素质/职业 0', t9i(2021, '教培', 'k12_subject_tutoring') === 12 && t9i(2021, '教培', 'quality') === 0 && t9i(2021, '教培', 'vocational') === 0);
   check('V16-57 P1-3 2022 教培：学科 +8，素质/职业 0', t9i(2022, '教培', 'k12_subject_tutoring') === 8 && t9i(2022, '教培', 'quality') === 0 && t9i(2022, '教培', 'vocational') === 0);
-  check('V16-58 P1-3 subsector 未定义时取表值（旧存档向后兼容）', t9i(2021, '教培') === 12 && t9i(2022, '教培') === 8 && t9i(2023, '教培') === 2);
+  check('V16-58 P1-3 subsector 未定义时返回 0（v1.4 严格门控，旧存档走迁移补填）', t9i(2021, '教培') === 0 && t9i(2022, '教培') === 0 && t9i(2023, '教培') === 0);
   check('V16-59 P1-3 2023 教培仍只认学科（+2 / 0 / 0）', t9i(2023, '教培', 'k12_subject_tutoring') === 2 && t9i(2023, '教培', 'quality') === 0 && t9i(2023, '教培', 'vocational') === 0);
   // Cross-scenario: 2021 年非学科教育公司 — layoffChance 学科比素质正好高 12。
   const layoff = (sub) => ctx(`layoffChance({ attrs: {}, flags: { era: { examYear: 2013 }, hasProtector: true, jobProfile: { employerType: 'startup', sector: 'education', sectorName: '教培', subsector: '${sub}', policyExposure: true, salaryAnnual: 10, startTurn: 5 } }, sealed: {}, commitments: {} })`);
@@ -458,7 +458,7 @@ function ks(stance, network, mem) {
 {
   const C = ctx('({ t9YearAdjustment, t9IndustryAdjustment, t9H2Chance, civilServiceAppeal, civilServiceWeight, foreignFirmVisibility, gambleChanceFrom, T9_YEAR_ADJUSTMENT, T9_INDUSTRY_ADJUSTMENT })');
   check('V16-61 P1-4 Y table adjudicated: 2021 0 / 2022 +3 / 2023 0', C.t9YearAdjustment(2021) === 0 && C.t9YearAdjustment(2022) === 3 && C.t9YearAdjustment(2023) === 0 && C.T9_YEAR_ADJUSTMENT[2022] === 3);
-  check('V16-62 P1-4 I table adjudicated: 2021 {3, 12} / 2022 {5, 8, 8} / 2023 {3, 2}', C.t9IndustryAdjustment(2021, '互联网') === 3 && C.t9IndustryAdjustment(2021, '教培') === 12 && C.t9IndustryAdjustment(2022, '互联网') === 5 && C.t9IndustryAdjustment(2022, '线下服务') === 8 && C.t9IndustryAdjustment(2022, '教培') === 8 && C.t9IndustryAdjustment(2023, '互联网') === 3 && C.t9IndustryAdjustment(2023, '教培') === 2);
+  check('V16-62 P1-4 I table adjudicated: 2021 {3, 12} / 2022 {5, 8, 8} / 2023 {3, 2}', C.t9IndustryAdjustment(2021, '互联网') === 3 && C.t9IndustryAdjustment(2021, '教培', 'k12_subject_tutoring') === 12 && C.t9IndustryAdjustment(2022, '互联网') === 5 && C.t9IndustryAdjustment(2022, '线下服务') === 8 && C.t9IndustryAdjustment(2022, '教培', 'k12_subject_tutoring') === 8 && C.t9IndustryAdjustment(2023, '互联网') === 3 && C.t9IndustryAdjustment(2023, '教培', 'k12_subject_tutoring') === 2);
   check('V16-63 P1-4 考公 2024-26 stays 78 (adjudication confirms WorkBuddy)', C.civilServiceAppeal(2024) === 78 && C.civilServiceAppeal(2025) === 78 && C.civilServiceAppeal(2026) === 78 && C.civilServiceWeight(2025) === 0.78);
   check('V16-64 P1-4 外企 2014-17 is 82 (adjudication), 2018-20 stays 75', C.foreignFirmVisibility(2015).weight === 82 && C.foreignFirmVisibility(2016).weight === 82 && C.foreignFirmVisibility(2019).weight === 75 && C.foreignFirmVisibility(2020).weight === 75);
   check('V16-65 P1-4 E sample is 79.5 (UI shows 80); H6 tiers fixed', ctx(`gambleChanceFrom({ skill: 70, network: 60, money: 40, partnerMod: 15, industryDown: false, partnerShares: true, tier: 'tense' })`) === 80);

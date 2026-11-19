@@ -135,11 +135,14 @@ function setGaokao(base, bonus) {
   click('t1-pick', 'insist');
   click('t1-confirm');
   check('insist below line -> 调剂 card (P1-e: k stays 1.3)', ctx('G.state.major').tier === '本科（调剂）' && ctx('G.state.major').name === '土木' && ctx('G.state.flags.majorK') === 1.3 && ctx('G.state.flags.adjusted') === true && screenHtml().includes('调剂'));
+  // v1.4 (P0-1): A 卡已签署不可重签——每个 pickT1 流程从全新 state 开始。
+  toT1();
   setGaokao(540);
   sandbox.document.querySelector('#t1-major').value = '会计';
   click('t1-pick', 'insist');
   click('t1-confirm');
   check('insist above line -> chosen major, k 1.3', ctx('G.state.major').name === '会计' && ctx('G.state.major').tier === '本科' && ctx('G.state.flags.majorK') === 1.3);
+  toT1();
   setGaokao(400);
   sandbox.document.querySelector('#t1-major').value = '会计';
   click('t1-pick', 'insist');

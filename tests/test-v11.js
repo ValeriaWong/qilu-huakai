@@ -141,22 +141,25 @@ function eraAdm(year, track, base, major) {
   // The old multiplicative factors (+15%/+20%/+5%) were rejected.
   check('T9-03 formula constants: base 20, +15/risk, clamp 5-85', C.T9_H2_BASE === 20 && C.T9_H2_PER_RISK === 15 && C.T9_H2_MIN === 5 && C.T9_H2_MAX === 85);
   check('T9-03 Y table (pp): 2021 0 / 2022 +3 / 2023 0 / others 0 (final adjudication 2026-11-20, ChatGPT mixed table)', C.t9YearAdjustment(2021) === 0 && C.t9YearAdjustment(2022) === 3 && C.t9YearAdjustment(2023) === 0 && C.t9YearAdjustment(2020) === 0 && C.t9YearAdjustment(2034) === 0 && C.T9_YEAR_ADJUSTMENT[2022] === 3);
-  check('T9-03 I table (pp): 2021 互联网3/教培12; 2022 互联网5/线下服务8/教培8; 2023 互联网3/教培2 (final adjudication 2026-11-20)', C.t9IndustryAdjustment(2021, '互联网') === 3 && C.t9IndustryAdjustment(2021, '教培') === 12 && C.t9IndustryAdjustment(2022, '互联网') === 5 && C.t9IndustryAdjustment(2022, '线下服务') === 8 && C.t9IndustryAdjustment(2022, '教培') === 8 && C.t9IndustryAdjustment(2023, '互联网') === 3 && C.t9IndustryAdjustment(2023, '教培') === 2);
+  check('T9-03 I table (pp): 2021 互联网3/教培12; 2022 互联网5/线下服务8/教培8; 2023 互联网3/教培2 (final adjudication 2026-11-20)', C.t9IndustryAdjustment(2021, '互联网') === 3 && C.t9IndustryAdjustment(2021, '教培', 'k12_subject_tutoring') === 12 && C.t9IndustryAdjustment(2022, '互联网') === 5 && C.t9IndustryAdjustment(2022, '线下服务') === 8 && C.t9IndustryAdjustment(2022, '教培', 'k12_subject_tutoring') === 8 && C.t9IndustryAdjustment(2023, '互联网') === 3 && C.t9IndustryAdjustment(2023, '教培', 'k12_subject_tutoring') === 2);
   check('T9-03 I table: other industry / year / no industry -> 0; 互联网平台 alias', C.t9IndustryAdjustment(2023, '地产') === 0 && C.t9IndustryAdjustment(2020, '互联网') === 0 && C.t9IndustryAdjustment(2022, null) === 0 && C.t9IndustryAdjustment(2022, '互联网平台') === 5);
   check('T9-03 t9H2Chance is additive: (0,2022,互联网） 20+0+3+5=28', C.t9H2Chance(0, 2022, '互联网') === 28);
-  check('T9-03 t9H2Chance: (0,2022,null)=23; (0,2021,教培）=32; (0,2023,地产）=20; (0,2034,null)=20', C.t9H2Chance(0, 2022, null) === 23 && C.t9H2Chance(0, 2021, '教培') === 32 && C.t9H2Chance(0, 2023, '地产') === 20 && C.t9H2Chance(0, 2034, null) === 20);
+  check('T9-03 t9H2Chance: (0,2022,null)=23; (0,2021,教培学科）=32; (0,2023,地产）=20; (0,2034,null)=20', C.t9H2Chance(0, 2022, null) === 23 && C.t9H2Chance(0, 2021, '教培', 'k12_subject_tutoring') === 32 && C.t9H2Chance(0, 2023, '地产') === 20 && C.t9H2Chance(0, 2034, null) === 20);
   check('T9-03 t9H2Chance clamps: (4,2022,互联网） 88 -> 85; (4,2021,null)=80', C.t9H2Chance(4, 2022, '互联网') === 85 && C.t9H2Chance(4, 2021, null) === 80);
   // layoffChance: score from the 4 risk factors, Y/I from the tables.
-  const chanceFor = (examYear, industry, allRisks) => {
+  const chanceFor = (examYear, industry, allRisks, subsector) => {
     eraState({ birthYear: examYear - 18, examYear });
     if (allRisks) ctx('G.state.flags.highPay = true; G.state.flags.hasProtector = false; G.state.flags.lowKpi = true; G.state.flags.deptShrinking = true;');
     else ctx('G.state.flags.highPay = false; G.state.flags.hasProtector = true; G.state.flags.lowKpi = false; G.state.flags.deptShrinking = false;');
     if (industry) ctx(`G.state.flags.jobIndustry = '${industry}';`);
+    // v1.4: 教培必须带细分才命中——layoffChance 经 jobProfile.subsector
+    // 传细分；不带细分的教培返回 0（见 test-v17 V17-23）。
+    if (subsector) ctx(`G.state.flags.jobProfile = { employerType: 'startup', sector: 'education', sectorName: '${industry}', subsector: '${subsector}', policyExposure: true, salaryAnnual: 10, startTurn: 5 };`);
     return ctx('layoffChance(G.state)');
   };
   check('T9-04 layoffChance 2014 cohort (crisis 2022) score 0 + 互联网 -> 28', chanceFor(2014, '互联网') === 28);
   check('T9-04 layoffChance 2014 cohort score 0, no industry -> 23', chanceFor(2014, null) === 23);
-  check('T9-04 layoffChance 2013 cohort (crisis 2021) score 0 + 教培 -> 32', chanceFor(2013, '教培') === 32);
+  check('T9-04 layoffChance 2013 cohort (crisis 2021) score 0 + 教培学科 -> 32', chanceFor(2013, '教培', false, 'k12_subject_tutoring') === 32);
   check('T9-04 layoffChance 2015 cohort (crisis 2023) score 0 + 地产 -> 20', chanceFor(2015, '地产') === 20);
   check('T9-04 layoffChance legacy (no era) score 0 -> 20, score 4 -> 80', (() => {
     ctx(`G = { state: newRun(12345, { difficulty: 'normal' }), rng: makeRng(12345), meta: loadMeta(), pickedObsessions: new Set(), pickedDifficulty: 'normal', pickedSlot: 1 };

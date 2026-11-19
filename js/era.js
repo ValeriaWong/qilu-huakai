@@ -110,11 +110,12 @@ function t9IndustryAdjustment(crisisYear, industry, subsector) {
   const row = T9_INDUSTRY_ADJUSTMENT[crisisYear];
   if (!row) return 0;
   if (industry === '教培') {
-    // v1.3 (P1-3 of the 2026-11-20 re-review): 教培修正只属于学科类
-    // 校外培训——2021/2022/2023 三年统一门控（v1.2 只门控了 2023）。
-    // 素质 / 职业培训三个年度均返回 0；subsector 未定义时（旧存档、
-    // 直接调用）取表值，保持向后兼容。
-    if (subsector && subsector !== 'k12_subject_tutoring') return 0;
+    // v1.4 (P1-3 of the 2026-11-20 second re-review): 教培修正只属于
+    // 学科类校外培训——严格门控：subsector 不是 k12_subject_tutoring
+    // 一律返回 0，包括 null / undefined / 未知细分。旧存档的细分缺失
+    // 在迁移层补（engine.js migrateSave 标 subsectorMissing，T9 切片
+    // 入口请玩家补选），不许靠放宽门控来兼容。
+    if (subsector !== 'k12_subject_tutoring') return 0;
     return row['教培'] || 0;
   }
   if (Object.prototype.hasOwnProperty.call(row, industry)) return row[industry];

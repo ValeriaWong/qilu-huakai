@@ -83,10 +83,38 @@ function loadGame(slot) {
     const raw = localStorage.getItem(saveKeyForSlot(slot || 1));
     if (!raw) return null;
     const s = JSON.parse(raw);
-    return s && s.version === VERSION ? s : null;
+    if (!s || s.version !== VERSION) return null;
+    return migrateSave(s);
   } catch (e) {
     return null;
   }
+}
+
+// ---- v1.4: 旧存档迁移层 ----
+// 只补分类、不发明数值：缺失的字段按“未定”标记，由 UI 或后续流程
+// 补填，绝不靠放宽判定条件来兼容。
+//   (a) 已封存 H5 的 v1.3 存档没有 sealedCareSubject → 从 T13 已写
+//       的 flags.careSubject 回填（同一值），T16 读封存记录才有依据。
+//   (b) 教培行业细分缺失的 jobProfile（v1.1 存档只有 jobIndustry，
+//       或 v1.2 存档的 subsector 为 null）→ 不猜细分，标
+//       flags.subsectorMissing，由 T9 切片入口的补填屏请玩家补选；
+//       补选前 t9IndustryAdjustment 按未知细分返回 0。
+//       没有 jobProfile 但 jobIndustry 是“教培”的旧存档，先建一个
+//       空壳 jobProfile（不编年薪：salaryAnnual 为 null 时补偿走
+//       默认值 8 万，见 severancePay），再标缺失。
+function migrateSave(s) {
+  if (!s || !s.flags) return s;
+  if (s.sealed && s.sealed.H5 && !s.flags.sealedCareSubject && s.flags.careSubject) {
+    s.flags.sealedCareSubject = s.flags.careSubject;
+  }
+  const jp = s.flags.jobProfile;
+  if (jp && (jp.sector === 'education' || jp.sectorName === '教培') && !jp.subsector) {
+    s.flags.subsectorMissing = true;
+  } else if (!jp && s.flags.jobIndustry === '教培') {
+    s.flags.jobProfile = { employerType: 'unknown', sector: 'education', sectorName: '教培', subsector: null, policyExposure: false, salaryAnnual: null, startTurn: 5 };
+    s.flags.subsectorMissing = true;
+  }
+  return s;
 }
 
 function clearSave(slot) {
@@ -113,7 +141,7 @@ function importCode(code) {
     if (checksum(payload) !== m[1]) return { ok: false, error: '校验失败：存档码可能被改过或复制不完整。' };
     const s = JSON.parse(payload);
     if (!s || s.version !== VERSION) return { ok: false, error: '存档版本不对。' };
-    return { ok: true, state: s };
+    return { ok: true, state: migrateSave(s) };
   } catch (e) {
     return { ok: false, error: '存档码读不出来：' + e.message };
   }
@@ -417,28 +445,65 @@ function h5Level(state) {
 //   孤儿 + 无伴侣 + 健康尚可 -> 无（这一年没有人需要你照顾，
 //     不扣父母医疗费，不强制放弃任何东西）
 // 其他监护人（养父母等）走 orphan 的伴侣/自身/无三档：养父母不在
-// 机制里单独建模——这是已知缺口，见设计文档 v1.2 节。
-// ---- v1.3 (P0-2 of the 2026-11-20 re-review): 断亲先于出身 ----
-// 断亲切断的是整个原生家庭线（含祖辈监护人），所以照护对象先读
-// familyBoundary/estranged，再读出身：断亲玩家只剩伴侣/自身/无三档，
-// 不默认承担父母或祖辈的医疗支出。flags.estranged 是 v1.2 的旧标志，
-// familyBoundary === 'estranged' 是 v1.2 的双维度新字段，两者都认。
+// ---- v1.3 (P0-2 of the 2026-11-20 re-review) + v1.4 (scope split) ----
+// 照护对象按断亲范围与出身定。断亲拆成两个目标（v1.4，第二次复审
+// 第四节）：parents（父母关系）与 caregiver（实际养育者——双缺席
+// 家庭是奶奶，其他出身里养育者就是父母本人）；“与整个原生家庭
+// 断联”是独立选项（all）。flags.estrangedScope 不存在时按 'all'
+// 处理（v1.3 旧存档：断亲即切断整个原生家庭线，保持向后兼容）。
+// flags.estranged 是 v1.2 的旧标志，familyBoundary === 'estranged'
+// 是 v1.2 的双维度新字段，两者都认。
 // （v1.2 的出身映射不变：父母健在 -> 父母；双缺席 -> 祖辈（奶奶）；
 // 孤儿 + 有伴侣 -> 伴侣；孤儿 + 无伴侣 + 健康 < 50 -> 自身；
 // 孤儿 + 无伴侣 + 健康尚可 -> 无。）
+const CARE_SUBJECTS = {
+  parents: { kind: 'parents', label: '父母', subject: '父母', careNoun: '父母的病' },
+  grandparents: { kind: 'grandparents', label: '奶奶', subject: '奶奶', careNoun: '奶奶的病' },
+  partner: { kind: 'partner', label: '伴侣', subject: '伴侣', careNoun: '伴侣的病' },
+  self: { kind: 'self', label: '你自己的身体', subject: '你自己的身体', careNoun: '你自己的身体' },
+  none: { kind: 'none', label: '', subject: '', careNoun: '' },
+};
+function estrangementScope(state) {
+  if (!state.flags || !(state.flags.estranged || state.flags.familyBoundary === 'estranged')) return null;
+  return state.flags.estrangedScope || 'all';
+}
 function careSubjectFor(state) {
-  if (state.flags && (state.flags.estranged || state.flags.familyBoundary === 'estranged')) {
+  const scope = estrangementScope(state);
+  if (scope) {
+    const key = state.origin ? state.origin.familyKey : null;
+    const hasParents = key === 'model' || key === 'absentFather' || key === 'absentMother' || key === 'npd';
+    const hasGrandparents = key === 'absentBoth';
+    // 养育者是谁：双缺席是奶奶，其他出身里养育者就是父母本人。
+    // 'parents' 只断父母线；'caregiver' 只断养育者线；'all' 全断。
+    const caregiverIsParents = !hasGrandparents;
+    const blockParents = scope === 'all' || scope === 'parents' || (scope === 'caregiver' && caregiverIsParents);
+    const blockGrandparents = scope === 'all' || (scope === 'caregiver' && hasGrandparents);
+    if (hasParents && !blockParents) return CARE_SUBJECTS.parents;
+    if (hasGrandparents && !blockGrandparents) return CARE_SUBJECTS.grandparents;
     return careSubjectNoParents(state);
   }
   const key = state.origin ? state.origin.familyKey : null;
   if (key === 'model' || key === 'absentFather' || key === 'absentMother' || key === 'npd') {
-    return { kind: 'parents', label: '父母', subject: '父母', careNoun: '父母的病' };
+    return CARE_SUBJECTS.parents;
   }
   if (key === 'absentBoth') {
-    return { kind: 'grandparents', label: '奶奶', subject: '奶奶', careNoun: '奶奶的病' };
+    return CARE_SUBJECTS.grandparents;
   }
   if (key === 'orphan') return careSubjectNoParents(state);
-  return { kind: 'parents', label: '父母', subject: '父母', careNoun: '父母的病' };
+  return CARE_SUBJECTS.parents;
+}
+// ---- v1.4 (P0-2 of the 2026-11-20 second re-review): 封存的照护对象 ----
+// H5 在 T13 封存时，照护对象一起封存（flags.sealedCareSubject，存
+// kind 字符串）。T16 只读封存记录——之后伴侣离开、关系变化，可以
+// 影响照护方式与关系后果，但不能让已发生的医疗事件凭空消失（扣费、
+// 对象、UI 三者一致）。读取顺序：sealedCareSubject（v1.4 新存档）
+// → careSubject（v1.3 存档，T13 已写）→ 现场重算（未封存时，如
+// 切片直入 T13 前的体检卡）。
+function sealedCareSubject(state) {
+  const fl = (state && state.flags) || {};
+  const kind = fl.sealedCareSubject || fl.careSubject || null;
+  if (kind && CARE_SUBJECTS[kind]) return CARE_SUBJECTS[kind];
+  return careSubjectFor(state);
 }
 function careSubjectNoParents(state) {
   if (state.flags && state.flags.relationship === 'partner') {
@@ -476,7 +541,7 @@ function fResilience(state) {
   const a = state.attrs;
   const met = [];
   if (a.money >= 30) met.push('money');
-  const careKind = (state.flags && state.flags.careSubject) || (state.origin ? careSubjectFor(state).kind : 'parents');
+  const careKind = sealedCareSubject(state).kind;
   if (careKind !== 'partner' && state.flags.relationship === 'partner' && state.sealed.H4 && state.sealed.H4.value >= 30) met.push('partner');
   if (a.health >= 60) met.push('health');
   return { pass: met.length >= 2, met };
@@ -1116,5 +1181,5 @@ function kindnessSource(state, meta) {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { SAVE_KEY, META_KEY, blankAttrs, newRun, saveGame, loadGame, clearSave, saveKeyForSlot, exportCode, importCode, loadMeta, saveMeta, pressureTier, settleYear, sealDie, omenTrueClaim, omenMisleadingClaim, omenClaimsFor, offerTier, layoffChance, gambleChance, gambleChanceFrom, tierLabel, h5Level, fResilience, careSubjectFor, severancePay, obsessionScore, counterfactualFlips, postFailureMitigation, classifyVenture, nonVentureReason, startVenture, ventureChance, ventureThemes, resolveVentureYear, rewardText, majorAdmissionLine, bestReachableMajor, resolveAdmission, npcReply, npcIntentOf, interviewEnFeedback, sanctuaryReply, kindnessSource, npcTrustOf, DRILL_TOPICS };
+  module.exports = { SAVE_KEY, META_KEY, blankAttrs, newRun, saveGame, loadGame, clearSave, saveKeyForSlot, exportCode, importCode, loadMeta, saveMeta, pressureTier, settleYear, sealDie, omenTrueClaim, omenMisleadingClaim, omenClaimsFor, offerTier, layoffChance, gambleChance, gambleChanceFrom, tierLabel, h5Level, fResilience, careSubjectFor, sealedCareSubject, estrangementScope, migrateSave, severancePay, obsessionScore, counterfactualFlips, postFailureMitigation, classifyVenture, nonVentureReason, startVenture, ventureChance, ventureThemes, resolveVentureYear, rewardText, majorAdmissionLine, bestReachableMajor, resolveAdmission, npcReply, npcIntentOf, interviewEnFeedback, sanctuaryReply, kindnessSource, npcTrustOf, DRILL_TOPICS };
 }
