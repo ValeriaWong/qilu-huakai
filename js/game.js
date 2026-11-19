@@ -78,7 +78,7 @@ function screenTitle() {
     </div>
     <h2>功能说明</h2>
     <p class="muted">英文面试：已实现——文本英文面试（英文提问 + 英文作答 + 反馈）。<br>心灵驿站：已实现——文本陪伴疏导（只陪伴，不诊断，不开处方）。<br>语音面试：试运行——浏览器语音识别，不可用时自动转文字输入。<br>免费演练：已实现——家庭沟通 / 面试 / 拒绝不合理要求，自由输入对话，不改正式世界线。</p>
-    <p class="foot">本地存档，不开数据源，不用登录。点「请 AI 审核」才会把点子发给外部 AI；匿名统计可关。存档码可导出 / 导入。v1.3 设计稿见仓库 README。</p>
+    <p class="foot">本地存档，不开数据源，不用登录。点「请 AI 审核」才会把点子发给外部 AI；匿名统计可关。存档码可导出 / 导入。v1.4 设计稿见仓库 README。</p>
     <div class="actions small">
       <button data-act="export">导出存档码</button>
       <button data-act="import">导入存档码</button>
@@ -1470,7 +1470,7 @@ function screenEnInterview() {
     <div class="card"><p><b>${esc(npc.name)}</b>（${esc(npc.role)}）· 文本英文面试：英文提问 + 英文作答 + 反馈。</p>
     <p class="muted">第 ${q + 1} / 3 问。回答用英文写，写完点发送，面试官会给你反馈。</p></div>
     <div class="card big"><h2>Q${q + 1}</h2><p>${esc(EN_INTERVIEW_QUESTIONS[q])}</p></div>
-    ${fb ? `<div class="card"><h2>反馈（上一问 · ${fb.score} / 3）</h2><p>${fb.lines.map((l) => esc(l)).join('<br>')}</p></div>` : ''}
+    ${fb ? `<div class="card"><h2>反馈（上一问 · 得分 ${fb.score} / 3）</h2><p>${fb.lines.map((l) => esc(l)).join('<br>')}</p></div>` : ''}
     <div class="card"><p><input id="drill-input" type="text" placeholder="Answer in English……" maxlength="400"></p>
     <p><button class="opt" data-act="drill-en-send">发送回答</button></p></div>
     <div class="actions"><button data-act="drill-back">返回</button></div>`);
@@ -1490,7 +1490,7 @@ function screenVoiceInterview() {
     <div class="card"><p><b>${esc(npc.name)}</b>（${esc(npc.role)}）· 浏览器语音识别。能用就语音答，不能用就转文字——试运行，不保证每台设备都能用。</p>
     <p class="muted">第 ${q + 1} / 3 问。点“开始语音回答”后对着麦克风说英文，识别结果会填进回答框，你确认后再发送。</p></div>
     <div class="card big"><h2>Q${q + 1}</h2><p>${esc(EN_INTERVIEW_QUESTIONS[q])}</p></div>
-    ${fb ? `<div class="card"><h2>反馈（上一问 · ${fb.score} / 3）</h2><p>${fb.lines.map((l) => esc(l)).join('<br>')}</p></div>` : ''}
+    ${fb ? `<div class="card"><h2>反馈（上一问 · 得分 ${fb.score} / 3）</h2><p>${fb.lines.map((l) => esc(l)).join('<br>')}</p></div>` : ''}
     <div class="card"><p><input id="drill-input" type="text" placeholder="语音识别结果会填在这里，也可以直接打字……" maxlength="400"></p>
     <p><button class="opt" data-act="drill-voice-start" ${avail ? '' : 'disabled'}>开始语音回答</button> <button class="opt" data-act="drill-voice-send">发送回答</button></p>
     <p id="drill-voice-status" class="muted">${avail ? '' : '这台设备 / 浏览器不支持语音识别，已自动转文字输入：直接在上面打字回答，一样有反馈。'}</p></div>
@@ -1513,7 +1513,7 @@ function screenEnSummary() {
     <h1>演练 · 英文面试 · 三问完成</h1>
     <div class="card"><p><b>${esc(npc.name)}</b>（${esc(npc.role)}）</p><p>总分 <b>${total} / 9</b>。${esc(drillSummaryVerdict(total))}</p></div>
     ${results.map((r) => `<div class="card"><h2>Q${r.q + 1} · ${r.score} / 3</h2><p>${esc(EN_INTERVIEW_QUESTIONS[r.q])}</p><p>${r.lines.map((l) => esc(l)).join('<br>')}</p></div>`).join('')}
-    <div class="actions"><button class="primary" data-act="drill-en-retry">再练一次</button><button data-act="drill-back">返回演练</button></div>`);
+    <div class="actions"><button class="primary" data-act="drill-en-retry">再练一次</button><button data-act="drill-back-lobby">返回演练</button></div>`);
 }
 function screenVoiceSummary() {
   const npc = NPCS.find((n) => n.id === 'interviewer');
@@ -1523,7 +1523,7 @@ function screenVoiceSummary() {
     <h1>演练 · 语音面试 · 三问完成</h1>
     <div class="card"><p><b>${esc(npc.name)}</b>（${esc(npc.role)}）</p><p>总分 <b>${total} / 9</b>。${esc(drillSummaryVerdict(total))}</p></div>
     ${results.map((r) => `<div class="card"><h2>Q${r.q + 1} · ${r.score} / 3</h2><p>${esc(EN_INTERVIEW_QUESTIONS[r.q])}</p><p>${r.lines.map((l) => esc(l)).join('<br>')}</p></div>`).join('')}
-    <div class="actions"><button class="primary" data-act="drill-voice-retry">再练一次</button><button data-act="drill-back">返回演练</button></div>`);
+    <div class="actions"><button class="primary" data-act="drill-voice-retry">再练一次</button><button data-act="drill-back-lobby">返回演练</button></div>`);
 }
 
 // ---------- v1.0: 承诺兑现卡（五格）----------
@@ -3082,6 +3082,8 @@ document.addEventListener('click', (e) => {
       else screenTitle();
       break;
     }
+    // v1.4.1：总结页的“返回演练”回演练列表，不是标题屏。
+    case 'drill-back-lobby': screenDrillLobby(); break;
     case 'drill-send': {
       const d = G.drill;
       if (!d) break;

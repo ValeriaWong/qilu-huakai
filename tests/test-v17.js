@@ -402,6 +402,56 @@ function eState(o) {
   click('drill-voice-retry');
   check('V17-49 总结页（语音）：再练一次回到 Q1', screenHtml().includes('第 1 / 3 问') && !screenHtml().includes('三问完成'));
 }
+{
+  // v1.4.1: feedback label shows the SCORE explicitly ("得分 X / 3"),
+  // not a bare "X / 3" that reads like a question number next to the
+  // "第 N / 3 问" counter. Regression: the live-drill report misread
+  // "反馈（上一问 · 1 / 3）" as the next-question counter.
+  ctx(`G = { state: null, rng: makeRng(999), meta: loadMeta(), pickedObsessions: new Set(), pickedDifficulty: 'normal', pickedSlot: 1 }; screenDrillLobby();`);
+  click('drill-start', 'en-interview');
+  sandbox.document.querySelector('#drill-input').value = "Hello, I'm a recent graduate in business administration. I enjoy solving problems with data, I worked on a campus project where I helped a small shop improve its online orders, and I'm eager to learn and contribute to your team.";
+  click('drill-en-send');
+  check('V17-50 反馈标题：英文面试 Q1 后写明“得分 1 / 3”', screenHtml().includes('反馈（上一问 · 得分 1 / 3）'));
+}
+{
+  ctx(`G = { state: null, rng: makeRng(999), meta: loadMeta(), pickedObsessions: new Set(), pickedDifficulty: 'normal', pickedSlot: 1 }; screenDrillLobby();`);
+  click('drill-start', 'voice');
+  sandbox.document.querySelector('#drill-input').value = "Hello, I'm a recent graduate in business administration. I enjoy solving problems with data, I worked on a campus project where I helped a small shop improve its online orders, and I'm eager to learn and contribute to your team.";
+  click('drill-voice-send');
+  check('V17-51 反馈标题：语音面试 Q1 后写明“得分 1 / 3”', screenHtml().includes('反馈（上一问 · 得分 1 / 3）'));
+}
+{
+  // v1.4.1: summary "返回演练" returns to the drill lobby, not the title screen.
+  ctx(`G = { state: null, rng: makeRng(999), meta: loadMeta(), pickedObsessions: new Set(), pickedDifficulty: 'normal', pickedSlot: 1 }; screenDrillLobby();`);
+  click('drill-start', 'en-interview');
+  sandbox.document.querySelector('#drill-input').value = 'I led a team of five and improved onboarding completion by 30 percent in three months.';
+  click('drill-en-send');
+  sandbox.document.querySelector('#drill-input').value = 'I handled a difficult customer by staying calm and offering a clear plan.';
+  click('drill-en-send');
+  sandbox.document.querySelector('#drill-input').value = 'I learned a new tool in one weekend and taught it to three teammates.';
+  click('drill-en-send');
+  check('V17-52 总结页：三问完成', screenHtml().includes('英文面试 · 三问完成'));
+  click('drill-back-lobby');
+  check('V17-53 总结页：返回演练回到演练列表，不是标题屏', screenHtml().includes('免费演练（不改世界线）') && !screenHtml().includes('<h1>歧路花开</h1>'));
+}
+{
+  ctx(`G = { state: null, rng: makeRng(999), meta: loadMeta(), pickedObsessions: new Set(), pickedDifficulty: 'normal', pickedSlot: 1 }; screenDrillLobby();`);
+  click('drill-start', 'voice');
+  sandbox.document.querySelector('#drill-input').value = 'I improved the process and saved the team two hours every week.';
+  click('drill-voice-send');
+  sandbox.document.querySelector('#drill-input').value = 'I handled a difficult customer by staying calm and offering a clear plan.';
+  click('drill-voice-send');
+  sandbox.document.querySelector('#drill-input').value = 'I learned a new tool in one weekend and taught it to three teammates.';
+  click('drill-voice-send');
+  check('V17-54 总结页（语音）：三问完成', screenHtml().includes('语音面试 · 三问完成'));
+  click('drill-back-lobby');
+  check('V17-55 总结页（语音）：返回演练回到演练列表，不是标题屏', screenHtml().includes('免费演练（不改世界线）') && !screenHtml().includes('<h1>歧路花开</h1>'));
+}
+{
+  // v1.4.1: title-screen footer tracks the current version.
+  ctx(`G = { state: null, rng: makeRng(999), meta: loadMeta(), pickedObsessions: new Set(), pickedDifficulty: 'normal', pickedSlot: 1 }; screenTitle();`);
+  check('V17-56 标题屏页脚：写 v1.4 设计稿，不再写 v1.3', screenHtml().includes('v1.4 设计稿见仓库 README') && !screenHtml().includes('v1.3 设计稿'));
+}
 
 console.log(failures === 0 ? 'ALL PASS (v17)' : failures + ' FAILURE(S) (v17)');
 process.exit(failures === 0 ? 0 : 1);
