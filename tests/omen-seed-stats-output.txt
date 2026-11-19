@@ -1,0 +1,4 @@
+Batch A (H4x3 + H5x3, seeds 1-100): accurate=406/600 = 0.6767 IN [0.60, 0.70]
+Batch B (H6x3 + Ex2, seeds 101-200): accurate=302/500 = 0.6040 IN [0.60, 0.70]
+Total: accurate=708/1100 = 0.6436 IN [0.60, 0.70]
+PASS: 65% omen accuracy verified on fixed seeds.

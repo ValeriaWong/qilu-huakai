@@ -418,7 +418,18 @@ function h5Level(state) {
 //     不扣父母医疗费，不强制放弃任何东西）
 // 其他监护人（养父母等）走 orphan 的伴侣/自身/无三档：养父母不在
 // 机制里单独建模——这是已知缺口，见设计文档 v1.2 节。
+// ---- v1.3 (P0-2 of the 2026-11-20 re-review): 断亲先于出身 ----
+// 断亲切断的是整个原生家庭线（含祖辈监护人），所以照护对象先读
+// familyBoundary/estranged，再读出身：断亲玩家只剩伴侣/自身/无三档，
+// 不默认承担父母或祖辈的医疗支出。flags.estranged 是 v1.2 的旧标志，
+// familyBoundary === 'estranged' 是 v1.2 的双维度新字段，两者都认。
+// （v1.2 的出身映射不变：父母健在 -> 父母；双缺席 -> 祖辈（奶奶）；
+// 孤儿 + 有伴侣 -> 伴侣；孤儿 + 无伴侣 + 健康 < 50 -> 自身；
+// 孤儿 + 无伴侣 + 健康尚可 -> 无。）
 function careSubjectFor(state) {
+  if (state.flags && (state.flags.estranged || state.flags.familyBoundary === 'estranged')) {
+    return careSubjectNoParents(state);
+  }
   const key = state.origin ? state.origin.familyKey : null;
   if (key === 'model' || key === 'absentFather' || key === 'absentMother' || key === 'npd') {
     return { kind: 'parents', label: '父母', subject: '父母', careNoun: '父母的病' };
@@ -426,16 +437,17 @@ function careSubjectFor(state) {
   if (key === 'absentBoth') {
     return { kind: 'grandparents', label: '奶奶', subject: '奶奶', careNoun: '奶奶的病' };
   }
-  if (key === 'orphan') {
-    if (state.flags && state.flags.relationship === 'partner') {
-      return { kind: 'partner', label: '伴侣', subject: '伴侣', careNoun: '伴侣的病' };
-    }
-    if ((state.attrs && typeof state.attrs.health === 'number' ? state.attrs.health : 70) < 50) {
-      return { kind: 'self', label: '你自己的身体', subject: '你自己的身体', careNoun: '你自己的身体' };
-    }
-    return { kind: 'none', label: '', subject: '', careNoun: '' };
-  }
+  if (key === 'orphan') return careSubjectNoParents(state);
   return { kind: 'parents', label: '父母', subject: '父母', careNoun: '父母的病' };
+}
+function careSubjectNoParents(state) {
+  if (state.flags && state.flags.relationship === 'partner') {
+    return { kind: 'partner', label: '伴侣', subject: '伴侣', careNoun: '伴侣的病' };
+  }
+  if ((state.attrs && typeof state.attrs.health === 'number' ? state.attrs.health : 70) < 50) {
+    return { kind: 'self', label: '你自己的身体', subject: '你自己的身体', careNoun: '你自己的身体' };
+  }
+  return { kind: 'none', label: '', subject: '', careNoun: '' };
 }
 
 // ---- v1.2 (P0-7): 裁员补偿按实际状态 ----
@@ -995,11 +1007,26 @@ function npcIntentOf(input) {
   if (has('请教', '建议', '怎么办', '怎么', '如何', 'should', 'how', 'what should')) return 'advice';
   return 'default';
 }
+// ---- v1.3 (P1-1): 每个意图由哪一个 values 维度驱动 ----
+// advice/result -> competence（慕能型看重能力与结果）；
+// vent/request -> reciprocity（重人情型更愿意接住倾诉与求助）；
+// refuse -> autonomy（自主型更接受“不”）；money -> hierarchy
+// （重等级型更在意谁说了算）；default -> competence。
+const NPC_INTENT_VALUE = { advice: 'competence', result: 'competence', vent: 'reciprocity', request: 'reciprocity', refuse: 'autonomy', money: 'hierarchy', default: 'competence' };
 function npcReply(npcId, input, memory, topic) {
   const table = NPC_REPLIES[npcId] || NPC_REPLIES.listener;
   const intent = npcIntentOf(input);
+  // ---- v1.3 (P1-1 of the 2026-11-20 re-review): values 真正参与回复 ----
+  // 每个意图由一个主导 value 驱动：求建议/谈结果 -> competence，倾诉/
+  // 求助 -> reciprocity，拒绝 -> autonomy，谈钱 -> hierarchy，其他 ->
+  // competence。主导 value ≥70 选第一条模板（更直接/更强硬），<70 选
+  // 第二条（更温和/更留有余地）——同一 NPC、同一输入、同一历史，改
+  // 主导 value 必换回复。backgroundTags 只作展示，npcReply 从不读它。
+  const npc = (typeof NPCS !== 'undefined' ? NPCS : []).find((n) => n.id === npcId) || null;
+  const values = (npc && npc.values) || { competence: 50, hierarchy: 50, reciprocity: 50, autonomy: 50 };
+  const driving = NPC_INTENT_VALUE[intent] || 'competence';
   const variants = table[intent] || table.default;
-  const idx = ((input || '').length + (topic || '').length) % variants.length;
+  const idx = values[driving] >= 70 ? 0 : (variants.length > 1 ? 1 : 0);
   let text = variants[idx];
   const mem = memory || { trust: 50, history: [] };
   const trust = typeof mem.trust === 'number' ? mem.trust : 50;
@@ -1011,15 +1038,16 @@ function npcReply(npcId, input, memory, topic) {
   }
   if (trust >= 60) text += (NPC_WARM_TAIL[npcId] || '');
   else if (trust <= 20) text += (NPC_GUARDED_TAIL[npcId] || '');
-  // 信任变化：支持性 +5，敌对 −5，讲出成果 +3（慕能型 NPC 更看重），
-  // 倾诉 +1（被听见本身建立一点信任），其余 0。
+  // 信任变化也读 values：支持性 +5（重人情型多 +1）；敌对 −5；
+  // 讲出成果 +3，慕能型 NPC（competence ≥75）多 +2；倾诉 +1，
+  // 重人情型（reciprocity ≥75）多 +1；其余 0。
   const t = (input || '').toLowerCase();
   let trustDelta = 0;
   if (['废物', '滚', '别烦', '你懂什么', '闭嘴', 'stupid', 'useless', 'shut up'].some((k) => t.includes(k))) trustDelta = -5;
-  else if (['谢谢', '辛苦', '请教', '麻烦你', 'thanks', 'thank you'].some((k) => t.includes(k))) trustDelta = 5;
-  else if (intent === 'result') trustDelta = 3;
-  else if (intent === 'vent') trustDelta = 1;
-  return { text, trustDelta, memoryNote: last ? 'referenced-history' : 'first-time' };
+  else if (['谢谢', '辛苦', '请教', '麻烦你', 'thanks', 'thank you'].some((k) => t.includes(k))) trustDelta = 5 + (values.reciprocity >= 75 ? 1 : 0);
+  else if (intent === 'result') trustDelta = 3 + (values.competence >= 75 ? 2 : 0);
+  else if (intent === 'vent') trustDelta = 1 + (values.reciprocity >= 75 ? 1 : 0);
+  return { text, trustDelta, memoryNote: last ? 'referenced-history' : 'first-time', drivenBy: driving, drivingValue: values[driving] };
 }
 // 演练主题（不改正式世界线，不涉付费改命）。
 const DRILL_TOPICS = [
@@ -1055,10 +1083,18 @@ function sanctuaryReply(input) {
   }
   return { crisis: false, text: null };
 }
-// ---- v1.2 (P1-7): 善意帮助的来源 ----
+// ---- v1.2 (P1-7), v1.3 (P1-2 of the 2026-11-20 re-review): 善意帮助的来源 ----
 // 关系好：找信任最高的 NPC（trust ≥50）；其次伴侣（H4 ≥30）；再按
 // 立场找老李/王姐；人脉 ≥40 找老陈；以上都没有：陌生人善意 / 公共
 // 资源 / 社区支持。保证“总能获得一个支持机会”，不保证指定 NPC 变好。
+// v1.3：站队/人脉后备路径也要过信任关——信任 <50 的 NPC 不会无条件
+// 帮忙，改走社区/陌生人。没打过交道的 NPC 信任记中立 50（立场本身
+// 就是一次关系，v1.2 的行为保留）；有明确敌意（trust <50）时不选他。
+function npcTrustOf(meta, npcId) {
+  const mem = (meta && meta.npcMemory) || {};
+  const m = mem[npcId];
+  return (m && typeof m.trust === 'number') ? m.trust : 50;
+}
 function kindnessSource(state, meta) {
   const mem = (meta && meta.npcMemory) || {};
   let best = null;
@@ -1073,12 +1109,12 @@ function kindnessSource(state, meta) {
   if (state.flags && state.flags.relationship === 'partner' && state.sealed && state.sealed.H4 && state.sealed.H4.value >= 30) {
     return { kind: 'partner', npcId: null, label: '伴侣' };
   }
-  if (state.flags && state.flags.stance === 'li') return { kind: 'npc', npcId: 'li', label: '老李' };
-  if (state.flags && state.flags.stance === 'wang') return { kind: 'npc', npcId: 'wang', label: '王姐' };
-  if ((state.attrs && state.attrs.network || 0) >= 40) return { kind: 'npc', npcId: 'laochen', label: '老陈' };
+  if (state.flags && state.flags.stance === 'li' && npcTrustOf(meta, 'li') >= 50) return { kind: 'npc', npcId: 'li', label: '老李' };
+  if (state.flags && state.flags.stance === 'wang' && npcTrustOf(meta, 'wang') >= 50) return { kind: 'npc', npcId: 'wang', label: '王姐' };
+  if ((state.attrs && state.attrs.network || 0) >= 40 && npcTrustOf(meta, 'laochen') >= 50) return { kind: 'npc', npcId: 'laochen', label: '老陈' };
   return { kind: 'stranger', npcId: 'community', label: '社区服务中心的工作人员' };
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { SAVE_KEY, META_KEY, blankAttrs, newRun, saveGame, loadGame, clearSave, saveKeyForSlot, exportCode, importCode, loadMeta, saveMeta, pressureTier, settleYear, sealDie, omenTrueClaim, omenMisleadingClaim, omenClaimsFor, offerTier, layoffChance, gambleChance, gambleChanceFrom, tierLabel, h5Level, fResilience, careSubjectFor, severancePay, obsessionScore, counterfactualFlips, postFailureMitigation, classifyVenture, nonVentureReason, startVenture, ventureChance, ventureThemes, resolveVentureYear, rewardText, majorAdmissionLine, bestReachableMajor, resolveAdmission, npcReply, npcIntentOf, interviewEnFeedback, sanctuaryReply, kindnessSource, DRILL_TOPICS };
+  module.exports = { SAVE_KEY, META_KEY, blankAttrs, newRun, saveGame, loadGame, clearSave, saveKeyForSlot, exportCode, importCode, loadMeta, saveMeta, pressureTier, settleYear, sealDie, omenTrueClaim, omenMisleadingClaim, omenClaimsFor, offerTier, layoffChance, gambleChance, gambleChanceFrom, tierLabel, h5Level, fResilience, careSubjectFor, severancePay, obsessionScore, counterfactualFlips, postFailureMitigation, classifyVenture, nonVentureReason, startVenture, ventureChance, ventureThemes, resolveVentureYear, rewardText, majorAdmissionLine, bestReachableMajor, resolveAdmission, npcReply, npcIntentOf, interviewEnFeedback, sanctuaryReply, kindnessSource, npcTrustOf, DRILL_TOPICS };
 }

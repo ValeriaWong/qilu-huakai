@@ -78,7 +78,7 @@ function screenTitle() {
     </div>
     <h2>功能说明</h2>
     <p class="muted">英文面试：已实现——文本英文面试（英文提问 + 英文作答 + 反馈）。<br>心灵驿站：已实现——文本陪伴疏导（只陪伴，不诊断，不开处方）。<br>语音面试：试运行——浏览器语音识别，不可用时自动转文字输入。<br>免费演练：已实现——家庭沟通 / 面试 / 拒绝不合理要求，自由输入对话，不改正式世界线。</p>
-    <p class="foot">本地存档，不开数据源，不用登录。点「请 AI 审核」才会把点子发给外部 AI；匿名统计可关。存档码可导出 / 导入。v1.2 设计稿见仓库 README。</p>
+    <p class="foot">本地存档，不开数据源，不用登录。点「请 AI 审核」才会把点子发给外部 AI；匿名统计可关。存档码可导出 / 导入。v1.3 设计稿见仓库 README。</p>
     <div class="actions small">
       <button data-act="export">导出存档码</button>
       <button data-act="import">导入存档码</button>
@@ -86,7 +86,10 @@ function screenTitle() {
     </div>`);
   G.pickedObsessions = new Set();
   G.pickedDifficulty = 'normal';
-  G.pickedSlot = 1;
+  // v1.3 (P0-4 of the 2026-11-20 re-review): 标题屏不再把周目位
+  // 重置回 1 号位——导入与重置都按用户当前选定的槽位走，渲染标题
+  // 不能悄悄换槽。非法值才回退到 1。
+  if (![1, 2, 3].includes(G.pickedSlot)) G.pickedSlot = 1;
 }
 
 function refreshChips() {
@@ -912,6 +915,9 @@ function startYear(turn) {
 function resumeYear(turn) {
   const s = G.state;
   s.turn = turn;
+  // v1.3 (P0-1): 已结算的年份恢复时直接看结算卡，不回通用年屏
+  // （否则“结束这一年”按钮又能点一次，重结算）。
+  if (s.flags.yearSettledTurn === turn && s.flags.settlement) return renderSettlementCard(s);
   G.kindnessHtml = kindnessResumeHtml(s);
   if (turn === 5) return screenT5();
   if (turn === 6) return screenT6();
@@ -1053,6 +1059,8 @@ function startYearRefresh() {
   // Re-render the current year screen with updated AP (keep the event).
   const s = G.state;
   const turn = s.turn;
+  // v1.3 (P0-1): 已结算的年份刷新后只看结算卡，不回通用年屏重结算。
+  if (s.flags.yearSettledTurn === turn && s.flags.settlement) return renderSettlementCard(s);
   const ev = s.currentEvent;
   setScreen(`
     <h1>T${turn} · ${17 + turn} 岁</h1>
@@ -1080,6 +1088,11 @@ function pickEvent(i) {
 
 function endYear() {
   const s = G.state;
+  // ---- v1.3 (P0-1 of the 2026-11-20 re-review): 结算幂等 ----
+  // 已结算的年份再点“结束这一年”，只重渲染已存的结算卡，不重跑
+  // venture 结算与 settleYear（刷新后 startYearRefresh 也拦一次，
+  // 见 resumeYear / startYearRefresh 的 yearPhase 检查）。
+  if (s.flags.yearSettledTurn === s.turn && s.flags.settlement) return renderSettlementCard(s);
   // Ventures resolve before the yearly settlement: running lines pay
   // passively; the line the player pushed this year rolls its milestone.
   const ventureLines = [];
@@ -1113,16 +1126,42 @@ function endYear() {
   const a = s.attrs;
   const brief = `${17 + s.turn} 岁这一年，你${s.yearActions.join('、') || '没做什么特别的事'}。${s.flags.eventChoice || ''}`;
   s.yearlyLog.push({ turn: s.turn, type: 'settle', text: brief });
+  // ---- v1.3 (P0-1): 结算状态持久化 ----
+  // 结算卡内容写进 flags.settlement（turn / before / after / tier /
+  // brief / actionsText / omenText / ventureLines），并以
+  // flags.yearSettledTurn 记下已结算的年份。刷新后 resumeYear /
+  // startYearRefresh / endYear 再进已结算的年份，只重渲染这张卡，
+  // 绝不重跑 settleYear 与 venture 结算。旧存档没有这两个字段，
+  // 按未结算处理（刷新回到通用年屏，见 renderSettlementCard 的回退）。
+  s.flags.yearSettledTurn = s.turn;
+  s.flags.settlement = {
+    turn: s.turn,
+    before: res.before,
+    after: { stress: a.stress, health: a.health, money: a.money, debt: a.debt },
+    tier: res.tier,
+    brief,
+    actionsText: s.yearActions.join('、') || '无',
+    omenText: s.omenLog.filter((o) => o.turn === s.turn).map((o) => o.text).join(' ') || '今年没有征兆。',
+    ventureLines,
+  };
   autosave('年度结算完成');
-  const next = s.turn + 1;
+  renderSettlementCard(s);
+}
+
+// 已结算年份的结算卡：纯渲染，只读 flags.settlement，绝不重算。
+// 旧存档没有 settlement 快照时回退到通用年屏（不凭空编一张卡）。
+function renderSettlementCard(s) {
+  const c = s.flags.settlement;
+  if (!c) return startYearRefresh();
+  const next = c.turn + 1;
   setScreen(`
-    <h1>年度结算卡 · T${s.turn}</h1>
+    <h1>年度结算卡 · T${c.turn}</h1>
     <div class="settle">
-      <div><b>今年做了什么</b><p>${esc(s.yearActions.join('、') || '无')}</p></div>
-      <div><b>属性变化</b><p>压力 ${res.before.stress} → ${a.stress}（${res.tier === 'calm' ? '稳' : res.tier === 'tense' ? '紧绷' : '崩'}），健康 ${res.before.health} → ${a.health}，钱 ${res.before.money} → ${a.money} 万，Debt ${res.before.debt} → ${a.debt}</p></div>
-      <div><b>人生简报</b><p>${esc(brief)}</p></div>
-      <div><b>被记下的征兆</b><p>${esc(s.omenLog.filter((o) => o.turn === s.turn).map((o) => o.text).join(' ') || '今年没有征兆。')}</p></div>
-      ${ventureLines.length ? `<div><b>我的项目</b><p>${esc(ventureLines.join(' '))}</p></div>` : ''}
+      <div><b>今年做了什么</b><p>${esc(c.actionsText || '无')}</p></div>
+      <div><b>属性变化</b><p>压力 ${c.before.stress} → ${c.after.stress}（${c.tier === 'calm' ? '稳' : c.tier === 'tense' ? '紧绷' : '崩'}），健康 ${c.before.health} → ${c.after.health}，钱 ${c.before.money} → ${c.after.money} 万，Debt ${c.before.debt} → ${c.after.debt}</p></div>
+      <div><b>人生简报</b><p>${esc(c.brief)}</p></div>
+      <div><b>被记下的征兆</b><p>${esc(c.omenText || '今年没有征兆。')}</p></div>
+      ${c.ventureLines.length ? `<div><b>我的项目</b><p>${esc(c.ventureLines.join(' '))}</p></div>` : ''}
     </div>
     ${next === 9 ? `<div class="actions"><button class="primary" data-act="to-slice">进入 T9 · 26 岁裁员之夜</button></div>`
       : `<div class="actions"><button class="primary" data-act="year-next" data-id="${next}">进入 T${next} · ${17 + next} 岁</button></div>`}`);
@@ -1473,7 +1512,7 @@ function redemptionCardHtml(s, id) {
     let third = `精确成功率 ${snap.chance}%，掷出 ${snap.roll}：${res.success ? '成了。' : '没成。'}`;
     if (res.success) third += ` 押的 ${snap.staked} 万翻倍回来（本金 + 等额收益），影响力 +20。`;
     else {
-      third += snap.line === 'startup' ? ' 押的现金归零，压力进崩档，健康 −20。' : ` 押的 ${snap.staked} 万没了，压力进崩档，健康 −20。`;
+      third += ` 押的 ${snap.staked} 万没了（押注之后另赚的钱还在），压力进崩档，健康 −20。`;
       if (typeof snap.h6 === 'number' && snap.h6 < 35) third += ' 合伙人卷款跑路（H6 < 35），剩下的钱再 −30%。';
       if (res.divorced) third += ' 伴侣也走了（H4 < 30，押注失败触发离婚/分手）。';
     }
@@ -1609,7 +1648,7 @@ function signT12() {
 
 // ---------- v1.0: T14 押注 ----------
 const E_LINES = [
-  { id: 'startup', name: '创业', desc: '押上全部现金 + 2 年时间 + 绑定合伙人。合伙人可靠性在签署时封存（H6）。失败：现金归零、压力进崩档、健康 −20。' },
+  { id: 'startup', name: '创业', desc: '押上全部现金 + 2 年时间 + 绑定合伙人。合伙人可靠性在签署时封存（H6）。失败：押的现金没了（押注之后另赚的不动）、压力进崩档、健康 −20。' },
   { id: 'abroad', name: '裸辞出国', desc: '押上一半现金，出去闯两年。没有合伙人，成败只看你自己攒下的底子。' },
   { id: 'takeover', name: '接盘', desc: '接手一个现成的盘子，押上一半现金。盘子是现成的，坑也是现成的。' },
   { id: 'work', name: '继续打工', desc: '不押注。两年平稳打工，攒下 4 万，压力 +4。没有骰子，也没有翻盘。' },
@@ -1719,11 +1758,16 @@ function resolveE(s) {
     a.money = Math.round((a.money + staked) * 10) / 10;
     a.influence += 20;
   } else {
-    // 失败：创业押全部≈现金归零；出国/接盘押一半，扣押金、剩一半。
-    // H6 < 35 卷款跑路：剩下的钱再 −30%（创业失败已归零，这一项只在
-    // 剩钱时才咬得到数，见设计文档 v1.0 节待定清单）。
-    if (snap.line === 'startup') a.money = 0;
-    else a.money = Math.max(0, Math.round((a.money - staked) * 10) / 10);
+    // ---- v1.3 (P0-3 of the 2026-11-20 re-review): 失败只清算押注的
+    // 风险敞口 ----
+    // 押注资本与押注后独立收入分账：失败没收的是签署时押上的钱
+    // （staked），不是 T16 的全部现金。T14 押 100 万、T15 另赚 3 万、
+    // T16 失败 → 3 万还在（100 万没了）。出国/接盘本来就是这个算法，
+    // 三条线现在统一：money = max(0, money − staked)。
+    // H6 < 35 卷款跑路：剩下的钱再 −30%（v1.2 时创业失败直接归零，
+    // 这一项只在剩钱时才咬得到数；现在创业失败也有剩钱，三条线都
+    // 咬得到数）。
+    a.money = Math.max(0, Math.round((a.money - staked) * 10) / 10);
     if (typeof snap.h6 === 'number' && snap.h6 < 35) a.money = Math.round(a.money * 0.7 * 10) / 10;
     a.stress = Math.max(a.stress, 75); // 压力进崩档
     a.health -= 20;
@@ -2160,6 +2204,20 @@ function enterSlice(direct) {
     s.flags.sliceEntered = true;
     Analytics.track('turn_start', { turn: 9 });
   }
+  // ---- v1.3 (P0-1): 切片阶段持久化 ----
+  // sliceEnd 完成后 flags.slicePhase = 'completed'；刷新/继续再进切片
+  // 时直接重渲染结局屏，不重跑 renderSliceDecision（sliceStep 已是 3，
+  // decs[3] 是 undefined，会崩）。旧存档没有 slicePhase 时，按
+  // sliceStep >= 3 回退判定（renderSliceDecision 也有同款守卫）。
+  // renderSliceOutro 前先 sliceSettleOnce：v1.2 的存档在结局屏刷新时
+  // 还没保存过结算结果（v1.2 的 sliceEnd 只渲染不保存），这一步把
+  // 补偿/压力补算一次；v1.3 的存档已有 sliceResolved，调用无操作。
+  if (s.flags.slicePhase === 'completed' || (reentering && s.sliceStep >= 3)) {
+    sliceSettleOnce(s);
+    autosave('进入 T9 切片');
+    renderSliceOutro(s);
+    return;
+  }
   autosave('进入 T9 切片');
   renderSliceDecision();
 }
@@ -2203,6 +2261,10 @@ function sliceBorrowOptions(s) {
 function renderSliceDecision() {
   const s = G.state;
   const decs = sliceDecisions(s);
+  // v1.3 (P0-1): sliceStep 越界守卫——三步已走完（旧存档/刷新在结局屏）
+  // 时不再取 decs[3]，直接渲染结局屏（先补算一次结算，幂等）。
+  if (typeof s.sliceStep !== 'number' || s.sliceStep < 0) s.sliceStep = 0;
+  if (s.sliceStep >= decs.length) { sliceSettleOnce(s); return renderSliceOutro(s); }
   const d = decs[s.sliceStep];
   let options = d.dynamic === 'borrow' ? sliceBorrowOptions(s) : d.options;
   // P1 (f, recheck 2026-11-17): before 2013 微信 is not the default
@@ -2251,41 +2313,46 @@ function sliceEnd() {
   const s = G.state;
   // v1.0: T9 不是终点，run 不在这里结束——runsFinished 只在 35 岁结算
   // 时 +1（见 screenSettlement）。“再来一次”也只在结算后出现。
+  // ---- v1.3 (P0-1): 切片结算与结局渲染分离 ----
+  // 补偿/压力只算一次（sliceSettleOnce，flags.sliceResolved 守卫）；
+  // 结局渲染是纯函数 renderSliceOutro，刷新后 enterSlice /
+  // renderSliceDecision 可直接调它重渲染，不重结算。
+  if (s.flags.sliceResolved) return renderSliceOutro(s);
   // v0.8: slice outcome as an enum (laid off / kept / kept via transfer).
   const h2s = s.flags.h2;
   const hrTalk = s.decisions['hr-talk'];
   const triedTransfer = !!(hrTalk && hrTalk.text.includes('转岗'));
   Analytics.track('slice', { outcome: !h2s ? t9Branch(s) : h2s.laidOff ? 'laid_off' : triedTransfer ? 'kept_transfer' : 'kept' });
-  // H2 resolution: the layoff die was sealed on entering the slice — read
-  // it here and apply the compensation. N = 本单位工作年限 × 月薪
-  // （劳动合同法经济补偿口径，见 engine.js severancePay）；the +1
-  // 代通知金 depends on the dismissal ground, so it is NOT automatic.
-  let h2Card = '';
+  sliceSettleOnce(s);
+  renderSliceOutro(s);
+}
+
+// 切片结算（只跑一次）：补偿/压力/t9Branch。sliceEnd 与 enterSlice
+// 的刷新路径都走它；已结算（sliceResolved）时无操作。
+// H2 resolution: the layoff die was sealed on entering the slice — read
+// it here and apply the compensation. N = 本单位工作年限 × 月薪
+// （劳动合同法经济补偿口径，见 engine.js severancePay）；the +1
+// 代通知金 depends on the dismissal ground, so it is NOT automatic.
+function sliceSettleOnce(s) {
+  if (s.flags.sliceResolved) return;
   const h2 = s.flags.h2;
   if (h2) {
     const hr = s.decisions['hr-talk'];
     const triedTransfer = hr && hr.text.includes('转岗');
     const sev = severancePay(s);
-    if (h2.laidOff) {
-      s.attrs.money += sev.amount;
-      h2Card = `<div class="card"><h2>裁员判定：你被裁了</h2><p>进切片时封存的骰子：掷出 ${h2.roll} ≤ ${h2.chance}（H2 裁员概率）。${sev.basis}，N = ${sev.amount} 万到账。${triedTransfer ? '你争取过转岗，但没有真实岗位空出来。' : ''}代通知金是否另算，取决于解除情形——谈话里你问清楚了没有？</p></div>`;
-    } else if (triedTransfer) {
-      s.attrs.stress = Math.max(0, s.attrs.stress - 5);
-      h2Card = `<div class="card"><h2>裁员判定：岗位保住了</h2><p>进切片时封存的骰子：掷出 ${h2.roll} > ${h2.chance}（H2 裁员概率）。你不在这一批名单里。转岗谈成了——转到了新项目组，压力 −5。</p></div>`;
-    } else {
-      s.attrs.stress += 5;
-      h2Card = `<div class="card"><h2>裁员判定：岗位保住了</h2><p>进切片时封存的骰子：掷出 ${h2.roll} > ${h2.chance}（H2 裁员概率）。你不在这一批名单里，但项目被砍了，压力 +5。</p></div>`;
-    }
-  } else {
-    // v1.2 (P0-7): 非雇员没有 H2——这一夜没有裁员骰，不领补偿，
-    // 走的是危机分支；三个决定只定应对，不定结果。
-    const branch = t9Branch(s);
-    const crisisLine = branch === 'startup' ? '账上的钱只剩三个月，三个决定只定应对，不定结果。'
-      : branch === 'grad' ? '论文和毕业压在眼前，三个决定只定应对，不定结果。'
-      : branch === 'freelance' ? '大客户断约，三个决定只定应对，不定结果。'
-      : '三个决定只定应对，不定结果。';
-    h2Card = `<div class="card"><h2>这一夜没有裁员骰</h2><p>你没有雇主，H2 不适用。走的是「${esc(T9_BRANCH_LABEL[branch] || branch)}」这条线：${crisisLine}</p></div>`;
+    if (h2.laidOff) s.attrs.money += sev.amount;
+    else if (triedTransfer) s.attrs.stress = Math.max(0, s.attrs.stress - 5);
+    else s.attrs.stress += 5;
   }
+  s.flags.t9Branch = t9Branch(s);
+  s.flags.slicePhase = 'completed';
+  s.flags.sliceResolved = true;
+  autosave('切片结束');
+}
+// 结局屏（纯渲染）：结算结果、背景、决定回放、征兆回放、当前状态。
+// 刷新后 enterSlice / renderSliceDecision 可直接调它重渲染，不重结算。
+function renderSliceOutro(s) {
+  const h2Card = sliceOutcomeCard(s);
   const decs = sliceDecisions(s).map((d) => {
     const got = s.decisions[d.id];
     return `<p><b>${esc(d.title)}</b><br>${got ? esc(got.text) + '——' + esc(got.seal) : '未决定'}</p>`;
@@ -2294,8 +2361,7 @@ function sliceEnd() {
   // player on. The branch only shapes the aftermath; the H2 die was
   // sealed when the slice was entered.
   const crisis = s.flags.t9Crisis;
-  const branch = t9Branch(s);
-  s.flags.t9Branch = branch;
+  const branch = s.flags.t9Branch || t9Branch(s);
   const crisisCard = crisis ? `<div class="card"><h2>这一夜的背景</h2><p>${crisis.crisisYear} 年${esc(crisis.label)}${crisis.fictional ? '（架空推演）' : ''}。这一夜之后，你走的是「${esc(T9_BRANCH_LABEL[branch] || branch)}」这条线。</p></div>` : '';
   const omens = s.omenLog.filter((o) => o.turn === 9).map((o) => o.text).join(' ');
   const outro = sliceBranch(s) === 'employed' ? T9_SLICE.outro : '三件事都决定了。承诺 C（危机应对）已经封存，兑现从 T10 开始。至于这一夜的危机——三个决定只定应对，不定结果。';
@@ -2318,6 +2384,31 @@ function sliceEnd() {
     </div>`);
 }
 
+// 结局卡（纯计算，不改属性）：H2 判定卡 + 非雇员分支卡。
+function sliceOutcomeCard(s) {
+  const h2 = s.flags.h2;
+  if (h2) {
+    const hr = s.decisions['hr-talk'];
+    const triedTransfer = hr && hr.text.includes('转岗');
+    const sev = severancePay(s);
+    if (h2.laidOff) {
+      return `<div class="card"><h2>裁员判定：你被裁了</h2><p>进切片时封存的骰子：掷出 ${h2.roll} ≤ ${h2.chance}（H2 裁员概率）。${sev.basis}，N = ${sev.amount} 万到账。${triedTransfer ? '你争取过转岗，但没有真实岗位空出来。' : ''}代通知金是否另算，取决于解除情形——谈话里你问清楚了没有？</p></div>`;
+    }
+    if (triedTransfer) {
+      return `<div class="card"><h2>裁员判定：岗位保住了</h2><p>进切片时封存的骰子：掷出 ${h2.roll} > ${h2.chance}（H2 裁员概率）。你不在这一批名单里。转岗谈成了——转到了新项目组，压力 −5。</p></div>`;
+    }
+    return `<div class="card"><h2>裁员判定：岗位保住了</h2><p>进切片时封存的骰子：掷出 ${h2.roll} > ${h2.chance}（H2 裁员概率）。你不在这一批名单里，但项目被砍了，压力 +5。</p></div>`;
+  }
+  // v1.2 (P0-7): 非雇员没有 H2——这一夜没有裁员骰，不领补偿，
+  // 走的是危机分支；三个决定只定应对，不定结果。
+  const branch = t9Branch(s);
+  const crisisLine = branch === 'startup' ? '账上的钱只剩三个月，三个决定只定应对，不定结果。'
+    : branch === 'grad' ? '论文和毕业压在眼前，三个决定只定应对，不定结果。'
+    : branch === 'freelance' ? '大客户断约，三个决定只定应对，不定结果。'
+    : '三个决定只定应对，不定结果。';
+  return `<div class="card"><h2>这一夜没有裁员骰</h2><p>你没有雇主，H2 不适用。走的是「${esc(T9_BRANCH_LABEL[branch] || branch)}」这条线：${crisisLine}</p></div>`;
+}
+
 // ---------- global actions ----------
 function exportSave() {
   const code = exportCode(G.state);
@@ -2327,7 +2418,7 @@ function exportSave() {
 }
 
 function importSave() {
-  setScreen(`<h1>导入存档码</h1><textarea id="import-code" rows="6" placeholder="粘贴 QILU1- 开头的存档码"></textarea>
+  setScreen(`<h1>导入存档码</h1><p class="muted">将导入到 ${G.pickedSlot} 号位（在标题页点周目位可切换目标槽位）。导入不会覆盖其他号位。</p><textarea id="import-code" rows="6" placeholder="粘贴 QILU1- 开头的存档码"></textarea>
     <div class="actions"><button class="primary" data-act="import-do">导入</button><button data-act="back">返回</button></div>`);
 }
 
@@ -2335,11 +2426,17 @@ function doImport() {
   const code = $('#import-code').value;
   const r = importCode(code);
   if (!r.ok) { alert(r.error); return; }
+  // ---- v1.3 (P0-4 of the 2026-11-20 re-review): 导入写进用户当前
+  // 选定的目标槽位，不信任存档自身的 slot 字段——2 号位导入 1 号位
+  // 的存档，不得覆盖 1 号位。存档码里的 slot 只作导出时的记录。
+  const targetSlot = G.pickedSlot || 1;
+  r.state.slot = targetSlot;
   G.state = r.state;
   G.rng = makeRng(r.state.seed);
   G.rng.setState(r.state.rngState || r.state.seed);
-  autosave('已导入');
-  alert('导入成功。');
+  G.pickedSlot = targetSlot;
+  autosave('已导入到 ' + targetSlot + ' 号位');
+  alert('导入成功，已保存到 ' + targetSlot + ' 号位。');
   screenTitle();
 }
 
@@ -2926,7 +3023,10 @@ document.addEventListener('click', (e) => {
     case 'import': importSave(); break;
     case 'import-do': doImport(); break;
     case 'reset':
-      if (confirm(`清除 ${G.pickedSlot} 号位的本地存档与周目记录，回到标题？`)) { clearSave(G.pickedSlot); localStorage.removeItem(META_KEY); G.meta = loadMeta(); screenTitle(); }
+      // v1.3 (P0-4): 重置只清当前槽位的本地存档，不清全局 meta——
+      // 其他槽位的存档、教训卡图鉴、演练记忆（npcMemory）都是共享
+      // 资料，重置一个周目位不得把它们一起抹掉。
+      if (confirm(`清除 ${G.pickedSlot} 号位的本地存档，回到标题？（其他周目位与共享图鉴、演练记忆不受影响）`)) { clearSave(G.pickedSlot); screenTitle(); }
       break;
     case 'analytics-toggle': {
       const off = !Analytics.optedOut();

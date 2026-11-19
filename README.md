@@ -207,6 +207,24 @@ Allen 2026-11-20 00:23 定：WorkBuddy 机制评审必须完全通过，改到�
 
 测试：`~/workspace/hackathon-tracker/qilu-huakai-tests/test-v15.js` 106 项新增（V15-01..106：P0 每项 + P1 每项 + 终审十项交叉场景）；`test-v12.js` 79 项、`test-v13.js` 136 项、`test-v14.js` 39 项、`test-v11.js` 131 项（旧断言改值原因见设计文档 v1.2 一节）。全量回归 782 项全过（v02-regression 8、v03 33、v04 18、v05 26、v06 21、v07 18、v08 63、v09 52、v10 32、v11 131、v12 79、v13 136、v14 39、v15 106、test-analytics 20；v1.1 基线 648）。
 
+## 本版范围（v1.3，ChatGPT 终审复审 9 项；机制 only，不碰视觉）
+
+复审记录 `alipay-emerge-rpg-chatgpt-final-review-recheck-20261120.md`（ChatGPT，2026-11-20 02:07，静态审计 v1.2，未实玩；总体结论：不通过——P0 3 通过 / 3 未通过 / 2 未验证，P1 3 通过 / 6 未通过；复审时 Pages 读不到、仓库里没有测试文件，所以“782 项测试全过：未验证”）。本版逐项落实复审第四节的 9 项（详见设计文档 v1.3 一节），并补齐复审要求的可核查证据。
+
+- P0-1 年度与 T9 恢复：年度结算设独立持久化状态（`flags.yearSettledTurn` + `flags.settlement` 快照），结算后刷新只重渲染结算卡，不重跑 `settleYear` 与 venture 结算；切片设 `flags.slicePhase`（deciding/completed）+ `flags.sliceResolved`，`sliceEnd` 拆成只算一次的 `sliceSettleOnce`（补偿/压力）与纯渲染的 `renderSliceOutro`，刷新在结局屏时直接重渲染，不取 `sliceDecisions[3]`；`renderSliceDecision` 加越界守卫；旧存档无快照时回退通用年屏 / 补算一次切片结算。
+- P0-2 断亲后照护：`careSubjectFor` 在出身判断前先读断亲（`flags.estranged` 或 `familyBoundary==='estranged'`），断亲玩家照护对象只剩伴侣/自身/无，不默认承担父母或祖辈医疗支出；T13 不封 H5，T16 明写“没有人需要你照顾”。
+- P0-3 T14 创业减损：失败只清算押注的风险敞口——三条线统一 `money = max(0, money − staked)`，T14 押 100 万、T15 另赚 3 万、T16 失败时 3 万还在；H6 < 35 卷款跑路（剩钱再 −30%）现在三条线都咬得到数；E 兑现卡与 E_LINES 创业描述删“现金归零”，改写“押的 X 万没了（押注之后另赚的钱还在）”。
+- P0-4 跨周目存档导入：导入写进用户当前选定的目标槽位（`r.state.slot = G.pickedSlot`），不信任存档自身的 slot 字段；导入屏写明目标槽位；标题屏不再把周目位悄悄重置回 1；重置只清当前槽存档，不清全局 meta（教训卡图鉴、演练记忆不受影响）。
+- P1-1 NPC 行为驱动：`npcReply` 真正读取 `NPCS.values`——每个意图由一个主导维度驱动（求建议/谈结果 → competence，倾诉/求助 → reciprocity，拒绝 → autonomy，谈钱 → hierarchy），主导值 ≥70 选第一条模板、<70 选第二条；信任变化也读 values（谈结果 competence ≥75 多 +2、倾诉 reciprocity ≥75 多 +1）；返回值加 `drivenBy` / `drivingValue`。
+- P1-2 善意来源：`kindnessSource` 全部 NPC 来源（含站队/人脉后备路径）均检查当前信任度（`npcTrustOf`，没打过交道的 NPC 记中立 50），信任 <50 的 NPC 不会无条件帮忙，改走社区/陌生人。
+- P1-3 教培行业门控：2021–2023 三年统一——教培修正只属于学科类校外培训（`k12_subject_tutoring`），素质/职业培训三个年度均返回 0；subsector 未定义时取表值（旧存档向后兼容）。
+- P1-4 历史权重：按复审第三节最终裁定表更新数值（Y 0/+3/0；I 2021 互联网 +3 / 教培 +12、I 2022 互联网 +5 / 线下服务 +8 / 教培 +8、I 2023 互联网 +3 / 教培 +2；考公 78 不变；外企 2014–17 取 82、2018–20 取 75 不变；E 79.5%、H6 三档不变），全是 GAME_BALANCE 游戏平衡值；era.js 注释删“教培年底离职率 71%”“纯互联网职位量同比 −50.4%”“阿里一年 −1.9 万”这类把参数写成统计结论的写法。裁定表改了 WorkBuddy v1.1 的三处数值，是 ChatGPT 的最终裁定——WorkBuddy 复审时再请它表态，若拒绝则升级给 Allen。
+- P1-5 0–18 成长片段：“第一次离家上大学”改为“高三那年冬天熬夜刷题”（高考前夜）；“爸爸不会扎头发”改为“爸爸不会做饭”（性别中性）；其余 16 条片段 + 6 条 counter 全量复核，无成年事件、无性别假设、无技术穿越。
+
+可核查证据：仓库 `tests/` 首次提交——16 个测试文件 + `run-all.sh` + `omen-seed-stats.js` + `omen-seed-stats-output.txt`。执行：`sh tests/run-all.sh`（仓库根目录）。65% 征兆固定种子统计：`node tests/omen-seed-stats.js`——Batch A（H4×3 + H5×3，种子 1–100）406/600 = 0.6767；Batch B（H6×3 + E×2，种子 101–200）302/500 = 0.6040；合计 708/1100 = 0.6436，三者都在 [0.60, 0.70]。工作区 `~/workspace/hackathon-tracker/qilu-huakai-tests/` 仍保留为工作源；仓库内 tests/ 是验证副本，只差两处移植适配：REPO 路径与 test-v08.js 的 `era_events.csv` 读取（仓库内读 `tests/era_events.csv`，该 CSV 作为 fixture 随 tests/ 一并提交，与工作区源文件字节一致）。直播演练（英文面试 3 问、心灵驿站安全回应、语音 + 文本降级）是浏览器实测，本轮未做——复审派单时须要求打开 Pages 实测。
+
+测试：`~/workspace/hackathon-tracker/qilu-huakai-tests/test-v16.js` 76 项新增（V16-01..76：P0 每项 + P1 每项 + 存档兼容 + 65% 征兆 600 条）；`test-v11.js` 131 项、`test-v14.js` 39 项、`test-v15.js` 106 项（数值随裁定表更新）。全量回归 858 项全过（v02-regression 8、v03 33、v04 18、v05 26、v06 21、v07 18、v08 63、v09 52、v10 32、v11 131、v12 79、v13 136、v14 39、v15 106、v16 76、test-analytics 20；v1.2 基线 782）。
+
 ## License
 
 MIT. See `LICENSE`.

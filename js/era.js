@@ -76,22 +76,20 @@ const T9_H2_BASE = 20;
 const T9_H2_PER_RISK = 15;
 const T9_H2_MIN = 5;
 const T9_H2_MAX = 85;
-// Macro correction Y by crisis year (pp). WorkBuddy 复审 2026-11-18 修订
-// （ChatGPT 原值 2021 0 / 2022 +3 / 2023 0 已废）：2021 双减 7 月落地，
-// 教培年底离职率 71%，Q4 大厂裁员已启动，Y=0 明显失真 → +2；2022 纯
-// 互联网职位量同比 −50.4%，全年裁员最重 → +5；2023 裁员延续但放缓
-// （阿里一年 −1.9 万）→ +1。Y 是游戏平衡参数 [待 playtest]，不是
-// 失业率换算。表只定义 2021–2023；表外年份显式默认 0（见下）。
-const T9_YEAR_ADJUSTMENT = { 2021: 2, 2022: 5, 2023: 1 };
-// Industry correction I by crisis year + industry (pp). WorkBuddy 复审
-// 2026-11-18 修订（原值 2021 互联网 +5 / 教培 +8、2023 教培 +5 已废）：
-// 2021 教培 +12（双减 7 月落地，Q4 大厂裁员还没全面启动，所以互联网
-// 只 +3）；2022 互联网 +5（职位量同比 −50.4%，2022 年互联网裁员最重）、
-// 线下服务 +8（疫情三季冲击；2021 没给线下服务修正，是因为疫情首年
-// 4–5 月后已复苏，6–12 月不该再加）、教培 +8；2023 教培 +2（尾部 /
-// 恢复期值——双减已满两年，存量人员已出清或转行，不再是 +5 的冲击值；
-// 之前 OPEN 注释里的“部分教培”未定义，2023 教培的修正值统一取 +2）。
-// I 是游戏平衡参数 [待 playtest]，不是失业率换算。
+// Macro correction Y by crisis year (pp). 2026-11-20 终审复审最终裁定
+// （ChatGPT 混合裁定，见设计文档 v1.3 一节）：2021 0 / 2022 +3 / 2023 0，
+// 取 ChatGPT 终审候选表，取代 WorkBuddy v1.1 的 +2/+5/+1。Y 是游戏平衡
+// 参数 [待 playtest]，不是失业率换算，也不是任何统计口径的推算；
+// 复审未采纳把逐年数值写成统计结论的写法，本注释不再逐项给现实数据
+// 锚点。表只定义 2021–2023；表外年份显式默认 0（见下）。
+const T9_YEAR_ADJUSTMENT = { 2021: 0, 2022: 3, 2023: 0 };
+// Industry correction I by crisis year + industry (pp). 2026-11-20 终审
+// 复审最终裁定（ChatGPT 混合裁定，见设计文档 v1.3 一节）：2021 互联网
+// +3 / 教培 +12（学科类 only，门控见下）；2022 互联网 +5 / 线下服务
+// +8 / 教培 +8（学科类 only）；2023 互联网 +3 / 教培 +2（学科类 only）。
+// 其中 I 2023 互联网取 ChatGPT 裁定 +3，取代 WorkBuddy v1.1 的 +5；
+// 其余值与 WorkBuddy v1.1 一致（复审确认）。I 是游戏平衡参数
+// [待 playtest]，不是失业率换算；以下不再逐项给现实数据锚点。
 // 表外年份显式默认 0（v1.1 显式规则）：T9 年份 = 高考年 + 8，覆盖
 // 2018–2026，但表只定义 2021–2023；不在表里的年份，年修正与行业修正
 // 都取 0（见下面 t9YearAdjustment / t9IndustryAdjustment 的 || 0 /
@@ -104,16 +102,17 @@ const T9_YEAR_ADJUSTMENT = { 2021: 2, 2022: 5, 2023: 1 };
 const T9_INDUSTRY_ADJUSTMENT = {
   2021: { '互联网': 3, '教培': 12 },
   2022: { '互联网': 5, '线下服务': 8, '教培': 8 },
-  2023: { '互联网': 5, '教培': 2 },
+  2023: { '互联网': 3, '教培': 2 },
 };
 function t9YearAdjustment(crisisYear) { return T9_YEAR_ADJUSTMENT[crisisYear] || 0; }
 function t9IndustryAdjustment(crisisYear, industry, subsector) {
   if (!industry) return 0;
   const row = T9_INDUSTRY_ADJUSTMENT[crisisYear];
   if (!row) return 0;
-  if (industry === '教培' && crisisYear === 2023) {
-    // v1.2 (P1-3): 2023 教培 +2 只用于学科类校外培训（双减针对学科
-    // 类）。素质 / 职业培训不走这个修正；subsector 未定义时（旧存档、
+  if (industry === '教培') {
+    // v1.3 (P1-3 of the 2026-11-20 re-review): 教培修正只属于学科类
+    // 校外培训——2021/2022/2023 三年统一门控（v1.2 只门控了 2023）。
+    // 素质 / 职业培训三个年度均返回 0；subsector 未定义时（旧存档、
     // 直接调用）取表值，保持向后兼容。
     if (subsector && subsector !== 'k12_subject_tutoring') return 0;
     return row['教培'] || 0;
@@ -779,7 +778,10 @@ function civilServiceStats(year) {
 }
 // 考公吸引力权重 (0-100, NOT a measured probability) by decision year.
 // Monotonic by design (v1.1, WorkBuddy 复审 2026-11-18): 2024–2026 档
-// 78——热度继续上行而非回落（原 72 已废）。国考过审人数 2024 303.3 万、
+// 78——热度继续上行而非回落（原 72 已废）。2026-11-20 终审复审最终裁定
+// 确认：2024–26 取 WorkBuddy 78（不取 ChatGPT 候选 76）。78 是
+// GAME_BALANCE 权重；人数/竞争比是已验证的公开系列数据，仅作单调
+// 趋势的背景，不推导 78。国考过审人数 2024 303.3 万、
 // 2025 341.6 万、2026 371.8 万，竞争比 41:1 → 74:1，录取率 1.1%，
 // 是 2010 年代后期唯一比 2009 年高考（5.98%）更难的考试；2022 届
 // 本科生“最优解”、2023 届 60% 以上想考、2024 届“近半数毕业就考公”，
@@ -865,12 +867,16 @@ function npcInstantChannel(year) {
 // overtook foreign firms', and the 2015–16 manufacturing exodus
 // (Suzhou / Dongguan / Shanghai factory closures) removed the
 // factory-side channel. 2015–16 was the inflection, not the peak.
+// v1.3 (P1-4, 终审复审 2026-11-20 最终裁定）：2014–2017 取 ChatGPT
+// 裁定 82（取代 WorkBuddy v1.1 的 78；复审理由：不能把部分外资制造
+// 企业调整概括为外企机会全面衰退），2018–2020 75 不变（复审确认）。
+// 以下 weight 均为 GAME_BALANCE 机会可见度参数，不是招聘率。
 // Differentiation by city / major / language / industry / player
 // initiative is later work, not faked here.
 // Returns { weight, fictional } — 2027+ is fictional (no band).
 const FOREIGN_FIRM_VISIBILITY_BANDS = [
   { from: 2010, to: 2013, weight: 80 },
-  { from: 2014, to: 2017, weight: 78 },
+  { from: 2014, to: 2017, weight: 82 },
   { from: 2018, to: 2020, weight: 75 },
   { from: 2021, to: 2022, weight: 70 },
   { from: 2023, to: 2024, weight: 75 },
