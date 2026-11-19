@@ -96,37 +96,47 @@ const T9_YEAR_ADJUSTMENT = { 2021: 2, 2022: 5, 2023: 1 };
 // 2018–2026，但表只定义 2021–2023；不在表里的年份，年修正与行业修正
 // 都取 0（见下面 t9YearAdjustment / t9IndustryAdjustment 的 || 0 /
 // return 0——那是这条规则的执行，不是隐式 fallback）。
-// NOTE (reachability): the game's current T5 jobs only produce
-// 互联网/体制内/本地服务/创业公司 as jobIndustry, so the 教培/线下服务
-// rows are unreachable until the job/industry vocabulary is aligned.
+// NOTE (reachability, v1.2 P1-3): T5 now offers a sector picker, so
+// 教培 / 线下服务 rows are reachable: pickT5 signs the job, then the
+// sector picker signs jobProfile { employerType, sector, subsector,
+// policyExposure, salaryAnnual, startTurn }. T9 reads jobProfile.sector
+// / subsector (engine.js layoffChance), not the company type.
 const T9_INDUSTRY_ADJUSTMENT = {
   2021: { '互联网': 3, '教培': 12 },
   2022: { '互联网': 5, '线下服务': 8, '教培': 8 },
   2023: { '互联网': 5, '教培': 2 },
 };
 function t9YearAdjustment(crisisYear) { return T9_YEAR_ADJUSTMENT[crisisYear] || 0; }
-function t9IndustryAdjustment(crisisYear, industry) {
+function t9IndustryAdjustment(crisisYear, industry, subsector) {
   if (!industry) return 0;
   const row = T9_INDUSTRY_ADJUSTMENT[crisisYear];
   if (!row) return 0;
+  if (industry === '教培' && crisisYear === 2023) {
+    // v1.2 (P1-3): 2023 教培 +2 只用于学科类校外培训（双减针对学科
+    // 类）。素质 / 职业培训不走这个修正；subsector 未定义时（旧存档、
+    // 直接调用）取表值，保持向后兼容。
+    if (subsector && subsector !== 'k12_subject_tutoring') return 0;
+    return row['教培'] || 0;
+  }
   if (Object.prototype.hasOwnProperty.call(row, industry)) return row[industry];
   if (industry === '互联网平台') return row['互联网'] || 0;
   return 0;
 }
-// The H2 chance for one player: score (0-4), crisis year, industry.
+// The H2 chance for one player: score (0-4), crisis year, industry,
+// subsector (optional; only 2023 教培 reads it).
 // Pure; the tables above are the only inputs besides the arguments.
-function t9H2Chance(score, crisisYear, industry) {
-  const raw = T9_H2_BASE + T9_H2_PER_RISK * score + t9YearAdjustment(crisisYear) + t9IndustryAdjustment(crisisYear, industry);
+function t9H2Chance(score, crisisYear, industry, subsector) {
+  const raw = T9_H2_BASE + T9_H2_PER_RISK * score + t9YearAdjustment(crisisYear) + t9IndustryAdjustment(crisisYear, industry, subsector);
   return Math.max(T9_H2_MIN, Math.min(T9_H2_MAX, raw));
 }
 // Which crisis branch the player is on at T9. The H2 die (sealed when
 // the slice is entered) decides laid-off vs kept; the branch only shapes
-// the aftermath. Grad-school and startup paths get their own branch.
-// NOTE: flags.gradSchool has no UI source yet (T5 offers no 读研 option)
-// — the branch exists and is tested, but is currently unreachable in play.
+// the aftermath. Grad-school, startup and freelance paths get their own
+// branch (v1.2 P0-7: T5 offers 读研 / 创业 / 自由职业）.
 function t9Branch(state) {
   const flags = state.flags || {};
   if (flags.gradSchool) return 'grad';
+  if (flags.employment === 'freelance') return 'freelance'; // v1.2 (P0-7): 自由职业走大客户断约线，不掷 H2
   const hasVenture = (state.ventures || []).some((v) => v.status === 'active' || v.status === 'validating' || v.status === 'running');
   if (flags.employment === 'startup' || hasVenture) return 'startup';
   const h2 = flags.h2;
@@ -138,7 +148,7 @@ function t9Branch(state) {
 }
 const T9_BRANCH_LABEL = {
   'laid-off': '被裁', transfer: '岗位协商', restructure: '组织调整',
-  pivot: '转型', startup: '创业危机', grad: '读研危机',
+  pivot: '转型', startup: '创业危机', grad: '读研危机', freelance: '自由职业危机',
 };
 
 // ---- exam system by province + year (v6.1 switching points) ----
@@ -659,8 +669,15 @@ function eraLogForTurn(state, turn) {
 // 篡改者字段）。同学 / 老师篡改志愿有真实例子，但那是另一条统计（刑事
 // 案件里同学 / 老师占主导，家长约 0——家长改志愿是家内事，不进刑事
 // 统计；戴柳 / 张来玉等家长改志愿案子另有记录），不进本机制。
-// Account access by family structure: a present parent holds it; a
-// grandparent guardian (absentBoth) or no parent at all (orphan) does not.
+// Account access by family structure — v1.2 (P1-2): this table is now
+// only the LEGACY fallback for saves made before v1.2 (they never stored
+// h0Access). New runs store flags.h0Access, rolled at S1 by
+// rollH0Access (game.js) from a family PRIOR, not a table lookup: a
+// present parent usually holds the account, a grandparent guardian
+// (absentBoth) or no parent at all (orphan) never does — but even an
+// NPD parent with access does not always tamper (strength is a separate
+// roll, rollH0, spread -40/+20 so no family guarantees h0 >= 60).
+const H0_ACCOUNT_ACCESS = { model: true, absentFather: true, absentMother: true, absentBoth: false, orphan: false, npd: true };
 // System by year: before 2013填报 was largely onsite (school computer
 // room / paper forms) — a parent could only change it by showing up in
 // person. From 2013 the online account is enough: whoever holds the
@@ -669,7 +686,6 @@ function eraLogForTurn(state, turn) {
 // [PLACEHOLDER] H0_TAMPER_THRESHOLD 60 ≈ “家长深度介入型家庭”——假设值，
 // 需 playtest 验证触发率 5–15%（见本文件顶部“数值来源标记”）。
 const H0_TAMPER_THRESHOLD = 60;
-const H0_ACCOUNT_ACCESS = { model: true, absentFather: true, absentMother: true, absentBoth: false, orphan: false, npd: true };
 function h0SystemForYear(examYear) {
   return examYear < 2013 ? 'onsite' : 'online';
 }
@@ -677,9 +693,13 @@ function h0TamperFactors(state) {
   const h0 = (state.sealed && state.sealed.H0) || null;
   const familyKey = state.origin ? state.origin.familyKey : null;
   const examYear = (state.flags && state.flags.era && state.flags.era.examYear) || 2026;
+  const storedAccess = state.flags && typeof state.flags.h0Access === 'boolean' ? state.flags.h0Access : null;
   return {
     h0: h0 ? h0.value : 0,
-    parentsHaveAccount: H0_ACCOUNT_ACCESS[familyKey] === true,
+    // v1.2 (P1-2): parentHasAccess is the stored roll when present;
+    // legacy saves fall back to the family table. Tampering still needs
+    // h0 >= 60 AND access AND no submitted confirmation.
+    parentsHaveAccount: storedAccess !== null ? storedAccess : H0_ACCOUNT_ACCESS[familyKey] === true,
     system: h0SystemForYear(examYear),
     // playerConfirmed = SUBMITTED confirmation (t1-confirm), not the
     // draft choice. choiceMade = a stance was picked on the T1 screen
@@ -709,7 +729,9 @@ function eraContextFor(state, turn) {
     calendarYear: calendarYearForTurn(examYear, turn),
     turn,
     age: ageForTurn(turn),
-    industry: (state.flags && state.flags.jobIndustry) || null,
+    // v1.2 (P1-3): industry is the Chinese display name (sectorName),
+    // not the sector id — era event text and the I table read it.
+    industry: ((state.flags && state.flags.jobProfile && (state.flags.jobProfile.sectorName || state.flags.jobProfile.sector)) || (state.flags && state.flags.jobIndustry)) || null,
     gradYear: examYear + 4,
     crisisYear: examYear + 8,
   };
@@ -865,11 +887,19 @@ function foreignFirmVisibility(entryYear) {
 // The venture "era adapter": when a player starts a venture in a given
 // calendar year, tech that did not exist yet is NOT silently overwritten
 // and the player's wish is NOT negated — the confirm screen shows what
-// was available then and the player chooses keep-or-adapt (three
-// principles: 不否定玩家愿望 / 不自动覆盖 / 由玩家确认；see game.js
-// idea-start → renderIdeaConfirm → idea-confirm). The table is the
-// data; adaptVentureTech is the detector; the UI lives in game.js.
+// was available then and the player chooses one of three responses
+// (adapt to era tech now / defer the note until the tech exists /
+// validate a simpler era-appropriate variant); refusing the rewrite
+// keeps the original idea as a DEFERRED note, never silently creates a
+// product that did not exist in that era (three principles: 不否定玩家
+// 愿望 / 不自动覆盖 / 由玩家确认；see game.js idea-start →
+// renderIdeaConfirm → idea-confirm). The table is the data;
+// adaptVentureTech is the detector; the UI lives in game.js.
 // Segments (year = calendar year of the venture start):
+//   1988–93 PC 单机时代（拨号上网之前，软件卖光盘）
+//   1994–99 互联网早期（1994 年中国接入国际互联网）
+//   2000–05 宽带 / 搜索 / 电商萌芽（百度 2000、淘宝 2003、QQ 1999 上线后起势）
+//   2006–09 Web 2.0 / 社交 / 移动前夜（人人 / 开心 2008、iPhone 2007）
 //   2010–12 规则 / 关键词 / 传统 ML (rules, keyword matching, classic ML)
 //   2013–15 传统 NLP / 推荐 + 移动互联网 / 公众号 / O2O；词向量
 //            (word2vec, released 2013) belongs to this segment
@@ -881,9 +911,13 @@ function foreignFirmVisibility(entryYear) {
 //            since the game tracks years, not months)
 //   2024–26 RAG / Agent (retrieval-augmented + agentic systems)
 //   2027+  架空 (fictional — no adaptation needed; any tech goes)
-// Pre-2010 years clamp to the first segment (the game starts 2010, but
-// the function must not break on earlier years).
+// v1.2 (P1-5): 1988–2009 不再以一个技术等级概括，内部按产品上线年代
+// 拆成四段；1988 年以前 clamp 到第一段（游戏最早 1988 年出生）。
 const VENTURE_TECH_SEGMENTS = [
+  { from: 1988, to: 1993, label: 'PC 单机时代', tech: ['单机软件', '个人电脑', '办公软件'], note: '拨号上网之前，软件卖光盘。' },
+  { from: 1994, to: 1999, label: '互联网早期', tech: ['门户网站', '电子邮件', '拨号上网'], note: '1994 年中国接入国际互联网。' },
+  { from: 2000, to: 2005, label: '宽带 / 搜索 / 电商萌芽', tech: ['搜索引擎', '电子商务', '即时通讯', '网络游戏'], note: '百度 2000、淘宝 2003、QQ 1999 上线后起势。' },
+  { from: 2006, to: 2009, label: 'Web 2.0 / 社交 / 移动前夜', tech: ['社交网络', '博客', '视频网站', '智能手机'], note: '人人 / 开心 2008、iPhone 2007，移动互联网前夜。' },
   { from: 2010, to: 2012, label: '规则 / 关键词 / 传统 ML', tech: ['规则引擎', '关键词匹配', '传统机器学习', '决策树', '逻辑回归'], note: '没有深度学习，也没有移动互联网红利。' },
   { from: 2013, to: 2015, label: '传统 NLP / 推荐 + 移动互联网', tech: ['传统 NLP', '推荐系统', '词向量', '微信公众号', 'O2O', '移动互联网'], note: '词向量（word2vec）2013 年发布，放在这一段。' },
   { from: 2016, to: 2018, label: '深度学习 NLP + 短视频 / 直播电商', tech: ['深度学习', '短视频', '直播电商', '小程序', '深度学习 NLP'], note: '区块链 2017–18 一波可选，不作主线。' },
@@ -892,13 +926,13 @@ const VENTURE_TECH_SEGMENTS = [
   { from: 2024, to: 2026, label: 'RAG / Agent', tech: ['RAG', 'Agent', '智能体', '检索增强'], note: '检索增强 + 智能体成为创业主线。' },
   { from: 2027, to: 9999, label: '架空', tech: [], note: '2027+ 为架空年份，任何技术都可用，不做年代适配。' },
 ];
-// The segment for a calendar year. Pre-2010 clamps to the first segment;
+// The segment for a calendar year. Pre-1988 clamps to the first segment;
 // 2027+ returns the fictional segment (tech: [] = no adaptation).
 function ventureTechForYear(year) {
   for (const s of VENTURE_TECH_SEGMENTS) {
     if (year >= s.from && year <= s.to) return s;
   }
-  return year < 2010 ? VENTURE_TECH_SEGMENTS[0] : VENTURE_TECH_SEGMENTS[VENTURE_TECH_SEGMENTS.length - 1];
+  return year < 1988 ? VENTURE_TECH_SEGMENTS[0] : VENTURE_TECH_SEGMENTS[VENTURE_TECH_SEGMENTS.length - 1];
 }
 // Earliest year each tech keyword becomes available (the year a venture
 // in that year can first rely on it). Keywords not in this list (plain
@@ -915,22 +949,37 @@ const VENTURE_TECH_EARLIEST = [
   { re: /区块链|blockchain/i, year: 2017, name: '区块链' },
   { re: /公众号|O2O|移动互联网|推荐系统|推荐算法/i, year: 2013, name: '移动互联网 / 推荐' },
   { re: /词向量|word2vec/i, year: 2013, name: '词向量' },
+  // v1.2 (P1-5): 1988–2009 的产品上线年代——2008 年想开网店、做搜索、
+  // 做社交，都要按这一年有没有这个东西算。
+  { re: /电商|淘宝|网购|网上购物/i, year: 2003, name: '电子商务' },
+  { re: /搜索引擎|搜索|百度|谷歌/i, year: 2000, name: '搜索引擎' },
+  { re: /社交|人人|开心网|校内/i, year: 2005, name: '社交网络' },
+  { re: /智能手机|\bapp\b|移动应用|手机应用/i, year: 2008, name: '智能手机 / 移动应用' },
+  { re: /互联网|网站|门户|上网/i, year: 1994, name: '互联网 / 网站' },
 ];
 // Detect era-unavailable tech in a venture idea for a calendar year.
-// Returns { needed, requested, segment, available }: needed = false when
-// nothing in the text is era-unavailable (plain ideas, or tech that
-// already existed that year, or the fictional 2027+ segment). requested
-// = the unavailable tech names found; segment = the year's segment;
-// available = that segment's tech list (the replacement options).
+// Returns { needed, requested, segment, available, deferUntil }:
+// needed = false when nothing in the text is era-unavailable (plain
+// ideas, or tech that already existed that year, or the fictional 2027+
+// segment). requested = the unavailable tech names found; segment = the
+// year's segment; available = that segment's tech list (the replacement
+// options); deferUntil = the earliest year ALL requested tech exists
+// (the year a deferred idea becomes creatable — the UI must NOT name
+// it to the player: "延后建议" never spoils future tech, it only says
+// the tech does not exist yet and the note is kept).
 function adaptVentureTech(text, year) {
   const segment = ventureTechForYear(year);
-  if (segment.label === '架空') return { needed: false, requested: [], segment, available: [] };
+  if (segment.label === '架空') return { needed: false, requested: [], segment, available: [], deferUntil: null };
   const requested = [];
+  let deferUntil = null;
   for (const k of VENTURE_TECH_EARLIEST) {
-    if (k.year > year && k.re.test(text)) requested.push(k.name);
+    if (k.year > year && k.re.test(text)) {
+      requested.push(k.name);
+      deferUntil = deferUntil === null ? k.year : Math.max(deferUntil, k.year);
+    }
   }
-  if (requested.length === 0) return { needed: false, requested: [], segment, available: [] };
-  return { needed: true, requested, segment, available: segment.tech.slice() };
+  if (requested.length === 0) return { needed: false, requested: [], segment, available: [], deferUntil: null };
+  return { needed: true, requested, segment, available: segment.tech.slice(), deferUntil };
 }
 
 if (typeof module !== 'undefined') {

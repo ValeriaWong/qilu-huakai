@@ -79,7 +79,7 @@ const FAMILIES = {
     fragments: [
       '你上小学时，每次收到妈妈寄来的包裹，都会先把信读三遍再拆礼物。',
       '爸爸不会扎头发，你小学六年一直留着最短的短发。',
-      '你第一次来例假/变声，是同桌的妈妈发现的——你回家没敢跟爸爸说。',
+      '你第一次遇到不知道怎么开口的身体问题，是同桌的妈妈帮你解了围——你回家没敢跟爸爸说。',
     ],
     counter: '你高三那年，妈妈辞掉了外地的工作回来陪考。她说：这次我不走了。',
   },
@@ -244,7 +244,7 @@ const YEAR_EVENTS = [
 // cash; a running line is not a flat +2 for everyone. `validation` is the
 // free first step for players who can't afford the startup cost yet.
 const VENTURE_ARCHETYPES = [
-  { id: 'ai-tool', name: 'AI 工具创业', cost: 2, attr: 'skill', risk: '技术迭代快，获客成本高。',
+  { id: 'ai-tool', name: 'AI 工具创业', cost: 2, attr: 'skill', risk: '技术迭代快，获客成本高。', requiredCapabilities: ['编程', '产品设计', '用户访谈'],
     validation: '访谈 10 个潜在用户，确认他们真的会为这个付费。',
     running: { money: 3 }, complete: { money: 5, influence: 5 },
     keys: ['ai', '人工智能', '智能', '求职', '简历', '面试', '助手', '工具', 'app', '小程序', '软件', '程序'],
@@ -253,7 +253,7 @@ const VENTURE_ARCHETYPES = [
       { name: '找到真实用户并获得付费反馈', reward: { influence: 6 } },
       { name: '建立可维护的产品与收入渠道', reward: { money: 6 } },
     ] },
-  { id: 'content', name: '内容 / 自媒体', cost: 0.5, attr: 'express', risk: '平台规则一变，流量就没了。',
+  { id: 'content', name: '内容 / 自媒体', cost: 0.5, attr: 'express', risk: '平台规则一变，流量就没了。', requiredCapabilities: ['内容创作', '平台运营', '持续更新'],
     validation: '连更两周，看有没有人真的留下来。',
     running: { money: 2 }, complete: { money: 4, influence: 6 },
     keys: ['视频', '直播', '公众号', '小红书', '抖音', '博主', '写作', '拍视频', '内容', '账号', '粉丝'],
@@ -262,7 +262,7 @@ const VENTURE_ARCHETYPES = [
       { name: '获得第一笔有效商业收入', reward: { influence: 8 } },
       { name: '形成稳定内容与收入模式', reward: { money: 4 } },
     ] },
-  { id: 'opensrc', name: '开源项目', cost: 0, attr: 'skill', risk: '维护成本高，没有直接收入。',
+  { id: 'opensrc', name: '开源项目', cost: 0, attr: 'skill', risk: '维护成本高，没有直接收入。', requiredCapabilities: ['编程', '社区运营', '文档写作'],
     validation: '把最小可用的版本发出来，看有没有人真的用。',
     running: { influence: 3 }, complete: { influence: 8, network: 3 },
     keys: ['开源', 'github', '代码', '库', '框架', '插件', '工具库'],
@@ -271,7 +271,7 @@ const VENTURE_ARCHETYPES = [
       { name: '建立真实使用者或贡献者群体', reward: { influence: 6, network: 3 } },
       { name: '获得赞助、服务收入或其他可持续支持', reward: { network: 5, influence: 5 } },
     ] },
-  { id: 'ecommerce', name: '电商 / 带货', cost: 3, attr: 'network', risk: '压货风险，平台扣点。',
+  { id: 'ecommerce', name: '电商 / 带货', cost: 3, attr: 'network', risk: '压货风险，平台扣点。', requiredCapabilities: ['选品', '供应链', '客服'],
     validation: '小批量拿 20 件货，测测真实转化和退货率。',
     running: { money: 4 }, complete: { money: 6, influence: 4 },
     keys: ['电商', '带货', '淘宝', '拼多多', '卖货', '开店', '选品', '进货'],
@@ -280,7 +280,7 @@ const VENTURE_ARCHETYPES = [
       { name: '完成真实订单及售后', reward: { money: 5 } },
       { name: '单位经济模型合理，建立稳定复购', reward: { money: 8, influence: 4 } },
     ] },
-  { id: 'service', name: '技能服务 / 接单', cost: 0, attr: 'express', risk: '时间换钱，天花板低。',
+  { id: 'service', name: '技能服务 / 接单', cost: 0, attr: 'express', risk: '时间换钱，天花板低。', requiredCapabilities: ['专业技能', '客户沟通', '作品集'],
     validation: '做一份作品集，拿到第一位愿意试单的客户。',
     running: { money: 3 }, complete: { money: 5, network: 3 },
     keys: ['接单', '家教', '设计', '翻译', '咨询', '摄影', '写稿', '兼职'],
@@ -289,7 +289,7 @@ const VENTURE_ARCHETYPES = [
       { name: '获得第一位付费客户', reward: { money: 3, network: 3 } },
       { name: '实现重复接单或转介绍', reward: { money: 5 } },
     ] },
-  { id: 'knowledge', name: '知识产品', cost: 1, attr: 'express', risk: '做出来容易，卖出去难，售后也占时间。',
+  { id: 'knowledge', name: '知识产品', cost: 1, attr: 'express', risk: '做出来容易，卖出去难，售后也占时间。', requiredCapabilities: ['内容创作', '教学', '社群运营'],
     validation: '做一节免费样课，看有没有人愿意为完整版付费。',
     running: { money: 2 }, complete: { money: 5, influence: 5 },
     keys: ['课程', '电子书', '资料', '培训', '教学', '训练营'],
@@ -298,7 +298,7 @@ const VENTURE_ARCHETYPES = [
       { name: '拿到第一笔真实付费', reward: { money: 3 } },
       { name: '稳定交付并处理后续更新与服务', reward: { money: 5, influence: 3 } },
     ] },
-  { id: 'local', name: '本地实体经营', cost: 5, attr: 'network', risk: '租金、设备、许可，样样都要先付钱。',
+  { id: 'local', name: '本地实体经营', cost: 5, attr: 'network', risk: '租金、设备、许可，样样都要先付钱。', requiredCapabilities: ['选址', '资金管理', '本地获客'],
     validation: '在目标地段摆一周摊，测客流和真实客单价。',
     running: { money: 5 }, complete: { money: 8 },
     keys: ['奶茶', '餐饮', '咖啡', '花店', '工作室', '维修', '理发', '小店'],
@@ -307,7 +307,7 @@ const VENTURE_ARCHETYPES = [
       { name: '合规开业并完成首批交易', reward: { money: 3 } },
       { name: '现金流能覆盖持续经营成本', reward: { money: 8 } },
     ] },
-  { id: 'generic', name: '创业项目', cost: 2, attr: 'skill', risk: '方向不明，先跑起来再说。',
+  { id: 'generic', name: '创业项目', cost: 2, attr: 'skill', risk: '方向不明，先跑起来再说。', requiredCapabilities: ['执行力', '用户访谈'],
     validation: '找 5 个可能付钱的人聊聊，他们到底为什么需要这个。',
     running: { money: 2 }, complete: { money: 5, influence: 5 },
     keys: [],
@@ -402,6 +402,54 @@ const T5_JOBS = [
   { id: 'stable',  name: '体制内', desc: '稳，但影响力上限 40。', money: 9, stress: 2, industry: '体制内' },
   { id: 'hometown',name: '回老家', desc: '家庭线 +2，事业慢。', money: 7, stress: 1, industry: '本地服务' },
   { id: 'startup', name: '创业公司', desc: '专业成长 ×1.5，但 3 年内倒闭率 35%。', money: 11, stress: 6, industry: '创业公司' },
+  // v1.2 (P0-7): 自由职业与读研进入 T5——没有雇佣关系的人不走 H2
+  // 裁员线，走各自的 T9 危机分支（见 T9_SLICE.branchSecond）。
+  { id: 'freelance', name: '自由职业', desc: '自己接单，收入不稳但自由。', money: 8, stress: 3, industry: '自由职业' },
+  { id: 'grad', name: '读研', desc: '继续读书，毕业晚三年，T9 走论文/毕业危机。', money: 0, stress: 2, industry: '在读' },
+];
+
+// ---- v1.2 (P1-3): 行业分类 ----
+// employerType（公司性质，T5_JOBS 的 id）与 sector（行业）分开；
+// sector 下再分 subsector（学科类校外培训的政策暴露只属于它）。
+// T9 的行业修正表按 sector 的中文名查（见 SECTOR_DISPLAY），
+// subsector 只用于 2023 教培的门控。
+const SECTORS = [
+  { id: 'internet', name: '互联网', subsectors: [] },
+  { id: 'education', name: '教培', subsectors: [
+    { id: 'k12_subject_tutoring', name: '学科类校外培训', policyExposure: true },
+    { id: 'quality', name: '素质教育', policyExposure: false },
+    { id: 'vocational', name: '职业培训', policyExposure: false },
+  ] },
+  { id: 'offline', name: '线下服务', subsectors: [] },
+  { id: 'finance', name: '金融', subsectors: [] },
+  { id: 'manufacturing', name: '制造业', subsectors: [] },
+  { id: 'healthcare', name: '医疗健康', subsectors: [] },
+  { id: 'public', name: '体制内 / 公共服务', subsectors: [] },
+  { id: 'other', name: '其他', subsectors: [] },
+];
+const SECTOR_DISPLAY = { internet: '互联网', education: '教培', offline: '线下服务', finance: '金融', manufacturing: '制造业', healthcare: '医疗健康', public: '体制内', other: '其他' };
+
+// ---- v1.2 (P1-1): NPC ----
+// 结构：id / name / role / backgroundTags / values / traits。
+// backgroundTags（地域、出身）只用于界面展示与成长叙事，绝不参与
+// 回复逻辑（engine.js npcReply 只读 values 与意图）；王姐是
+// “慕强、重结果”，不是“关系偏好+饭局敬酒”。
+// values：competence 慕能 / hierarchy 重秩序层级 / reciprocity 重人情
+// 互惠 / autonomy 重自主（0–100）。
+const NPCS = [
+  { id: 'wang', name: '王姐', role: '直属领导', backgroundTags: ['山东', '资源型管理者', '体制内出身'], values: { competence: 85, hierarchy: 60, reciprocity: 40, autonomy: 55 }, traits: '慕强、重结果' },
+  { id: 'li', name: '老李', role: '资深同事', backgroundTags: ['辽宁', '技术出身', '老国企'], values: { competence: 90, hierarchy: 25, reciprocity: 70, autonomy: 80 }, traits: '能力偏好型，不护短' },
+  { id: 'laochen', name: '老陈', role: '前直属领导', backgroundTags: ['山东', '销售出身', '爱张罗'], values: { competence: 60, hierarchy: 40, reciprocity: 85, autonomy: 60 }, traits: '讲义气' },
+  { id: 'interviewer', name: 'Ms. Carter', role: '外企面试官', backgroundTags: ['上海', '外企 HR', '双语'], values: { competence: 80, hierarchy: 70, reciprocity: 50, autonomy: 60 }, traits: '看结果、看结构' },
+  { id: 'listener', name: '阿静', role: '心灵驿站倾听者', backgroundTags: ['吉林', '心理咨询志愿者'], values: { competence: 55, hierarchy: 15, reciprocity: 90, autonomy: 75 }, traits: '只陪伴，不诊断' },
+  { id: 'community', name: '小周', role: '社区工作者', backgroundTags: ['本地', '社区服务中心'], values: { competence: 65, hierarchy: 55, reciprocity: 80, autonomy: 70 }, traits: '有资源、讲程序' },
+];
+
+// 英文面试三问（P1-1 / Q1：文本英文面试流程）。
+const EN_INTERVIEW_QUESTIONS = [
+  'Tell me about yourself.',
+  'Describe a challenge you faced at work and how you handled it.',
+  'Why do you want to join our company?',
 ];
 
 // T9 裁员之夜 (the 3-minute slice). Three decisions, first within 90s.
@@ -444,8 +492,75 @@ const T9_SLICE = {
     },
   ],
   outro: '三件事都决定了。承诺 C（裁员应对）已经封存，兑现从 T10 开始。至于裁员本身——那颗骰子在今晚开始前就掷好了，结局在下面。',
+  // v1.2 (P0-7): 非雇员的 T9 危机分支。没有雇佣关系的人不掷 H2、不领
+  // 补偿，走自己的危机线：创业（账上只剩三个月钱）/ 读研（论文与毕业）
+  // / 自由职业（大客户断约）。第一、第二件事按分支换文案，第三件事
+  // （跟家里借钱）所有分支共用。
+  branchIntros: {
+    startup: '26 岁，周二晚上 21:47。账上的钱只够烧三个月，投资人的电话一直没打通。今晚要决定三件事。',
+    grad: '26 岁，周二晚上 21:47。论文卡住了，导师的邮件躺在收件箱里，毕业答辩还有三个月。今晚要决定三件事。',
+    freelance: '26 岁，周二晚上 21:47。最大的客户刚发来消息：下个季度的单子要停了。今晚要决定三件事。',
+  },
+  branchFirst: {
+    startup: {
+      id: 'call-partner', title: '第一件事：今晚找谁聊聊？',
+      body: '合伙人最近也在愁钱，你们上次见面还是半个月前。投资人那边，你不知道这句话还有多少分量。',
+      options: [
+        { text: '打电话给合伙人', fx: { network: 2, stress: -3 }, seal: '你拨通了合伙人的电话。他接了，第一句话是：“我也在算账。”', omen: '合伙人在电话那头停顿了两秒。' },
+        { text: '先发微信给投资人', fx: { network: 1 }, seal: '你发了一条微信：“最近有个进展想跟您同步一下。”他回了一个“在开会，晚点说”。', omen: '微信发出去之后，对方正在输入……又停了。' },
+        { text: '先算一遍账', fx: { skill: 1, stress: 2 }, seal: '你打开表格，把三个月的现金流重新算了一遍。', omen: '你翻到一张旧名片，是第一位客户留下的。' },
+      ],
+    },
+    grad: {
+      id: 'call-mentor', title: '第一件事：今晚找谁聊聊？',
+      body: '师兄去年刚毕业，他走过的路你正在走。导师的邮件还躺在收件箱里，你不知道这句话还有多少分量。',
+      options: [
+        { text: '打电话给师兄', fx: { network: 2, stress: -3 }, seal: '你拨通了师兄的电话。他接了，第一句话是：“我听说了，论文卡住了吧。”', omen: '师兄在电话那头停顿了两秒。' },
+        { text: '给导师发邮件', fx: { network: 1 }, seal: '你写了一封邮件：“老师，论文遇到点问题，想跟您约个时间。”发出去之后，你盯着收件箱看了很久。', omen: '邮件发出去之后，收件箱一直没有新消息。' },
+        { text: '先列论文大纲', fx: { skill: 1, stress: 2 }, seal: '你打开文档，把论文大纲重新列了一遍，卡住的那一节标了红。', omen: '你翻到一张旧的学生证，照片上的你比现在瘦一点。' },
+      ],
+    },
+    freelance: {
+      id: 'call-client', title: '第一件事：今晚找谁聊聊？',
+      body: '老客户是你合作最久的人，他介绍过来的单子占了你收入的一半。你们偶尔保持联系，他曾经说过，有合适的单子会先想到你。',
+      options: [
+        { text: '打电话给老客户', fx: { network: 2, stress: -3 }, seal: '你拨通了老客户的电话。他接了，第一句话是：“我听说了。”', omen: '老客户在电话那头停顿了两秒。' },
+        { text: '在同行群里问问', fx: { network: 1 }, seal: '你在同行群里发了一句：“最近有单子吗？”有人回了一个“最近都难”。', omen: '群里发出去的消息，半天没人接话。' },
+        { text: '先整理作品集', fx: { skill: 1, stress: 2 }, seal: '你打开电脑，把作品集和这三年的项目清单重新整理了一遍。', omen: '你翻到一张旧合同，是第一单留下的。' },
+      ],
+    },
+  },
+  branchSecond: {
+    startup: {
+      id: 'runway', title: '第二件事：账上只剩三个月钱，怎么办？',
+      body: '三个月之后发不出工资。投资人没回话，合伙人也在等你的决定。降成本、找钱、关业务——每一条都要真金白银地疼。',
+      options: [
+        { text: '找投资人谈续命', fx: { stress: 5 }, seal: '你决定找投资人谈：再撑一轮，条件可以谈。', omen: '你把商业计划书从抽屉里翻了出来。' },
+        { text: '降成本，先裁员', fx: { stress: 10 }, seal: '你决定先降成本。但裁谁、怎么谈，都要你自己去谈。', omen: '你想起办公室里那个空了两个月的工位。' },
+        { text: '关掉一条业务线', fx: { stress: 5 }, seal: '你决定关掉最烧钱的那条线，先保住主业。', omen: '合伙人点了点头，说“可以，先保主业”。' },
+      ],
+    },
+    grad: {
+      id: 'thesis', title: '第二件事：论文卡住了，怎么办？',
+      body: '毕业答辩还有三个月，论文的核心章节还没写出来。延期、换题、硬写——每一条都要你自己扛。',
+      options: [
+        { text: '找导师谈延期', fx: { stress: 5 }, seal: '你决定找导师谈：申请延期，把论文写扎实。', omen: '你把开题报告从抽屉里翻了出来。' },
+        { text: '换个更小的题目', fx: { stress: 10 }, seal: '你决定换个更小的题目。但换题要重新开题，时间更紧。', omen: '你想起图书馆里那个空了两个月的座位。' },
+        { text: '先写完一章再说', fx: { stress: 5 }, seal: '你决定不纠结：先把能写的那一章写完，再看。', omen: '导师回了邮件，说“先写出来再说”。' },
+      ],
+    },
+    freelance: {
+      id: 'client', title: '第二件事：大客户断约，怎么办？',
+      body: '大客户的单子占了你收入的一半，下个季度说停就停。问原因、降价留人、找新客户——每一条都要你自己谈。',
+      options: [
+        { text: '问清楚断约原因', fx: { stress: 5 }, seal: '你决定先问清楚：是预算问题，还是对你的交付不满意。', omen: '你把上一单的合同从抽屉里翻了出来。' },
+        { text: '降价留住客户', fx: { stress: 10 }, seal: '你决定降价留住客户。但降多少、降多久，都要谈了才知道。', omen: '你想起上个月那个被砍掉的单子。' },
+        { text: '先找新客户', fx: { stress: 5 }, seal: '你决定不纠缠：先把手头的作品集发出去，找新客户。', omen: '老客户回了一句，说“以后有单子再找你”。' },
+      ],
+    },
+  },
 };
 
 if (typeof module !== 'undefined') {
-  module.exports = { DIFFICULTIES, OBSESSIONS, FAMILIES, TAG_KEYWORDS, ACTIONS, YEAR_EVENTS, T1_MAJORS, GAOKAO_REGIONS, GAOKAO_DEFAULT_REGION, MAJOR_LINE_OFFSETS, MAJOR_LINE_DEFAULT_OFFSET, T5_JOBS, T9_SLICE, VENTURE_ARCHETYPES, THEME_KEYWORDS };
+  module.exports = { DIFFICULTIES, OBSESSIONS, FAMILIES, TAG_KEYWORDS, ACTIONS, YEAR_EVENTS, T1_MAJORS, GAOKAO_REGIONS, GAOKAO_DEFAULT_REGION, MAJOR_LINE_OFFSETS, MAJOR_LINE_DEFAULT_OFFSET, T5_JOBS, T9_SLICE, VENTURE_ARCHETYPES, THEME_KEYWORDS, NPCS, SECTORS, SECTOR_DISPLAY, EN_INTERVIEW_QUESTIONS };
 }
