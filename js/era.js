@@ -13,6 +13,16 @@
  */
 
 // ---- year bounds (Allen 2026-11-17 00:29) ----
+// 数值来源标记（WorkBuddy 机制复审 2026-11-18 要求；v1.1）：
+//   [已验证] CIVIL_SERVICE_SERIES 锚点（2010 审查 144.3 万 / 招录 15,526；
+//     2023 259.77 万 / 37,100；2024–26 过审 303.3 / 341.6 / 371.8 万，
+//     竞争比 41:1 → 74:1）与 T9 危机锚点（下岗潮 / 供给侧 / 双减）。
+//   [待 playtest] H0_TAMPER_THRESHOLD 60（假设：60 ≈“家长深度介入型
+//     家庭”，需 playtest 验证触发率 5–15%）；T9_H2_PER_RISK 15pp；
+//     I 值（行业修正）——三者都是游戏平衡参数，不是失业率换算。
+//   [设计动机] 考公吸引力单调递增（2024–26 档 78：热度继续上行而非
+//     回落）；外企可见度峰值后移（光环顶点在 2005–2012，2014 起互联网
+//     大厂总包反超，2015–16 制造撤离潮）。
 const ERA_BIRTH_MIN = 1970;
 const ERA_BIRTH_MAX = 2008;
 const ERA_BIRTH_HIGHLIGHT_MIN = 1990; // default highlight: 1990-2008
@@ -66,26 +76,33 @@ const T9_H2_BASE = 20;
 const T9_H2_PER_RISK = 15;
 const T9_H2_MIN = 5;
 const T9_H2_MAX = 85;
-// Macro correction Y by crisis year (pp). 2022 is the only year with a
-// positive correction: the year's macro pressure was the highest of the
-// three (surveyed urban unemployment 5.6% vs 5.1% in 2021 and 5.2% in
-// 2023). 2021 does not support a blanket +15pp (employment was broadly
-// stable); 2023 uses a new (ex-student) statistical口径 and cannot be
-// directly compared with the two earlier years.
-const T9_YEAR_ADJUSTMENT = { 2021: 0, 2022: 3, 2023: 0 };
-// Industry correction I by crisis year + industry (pp). Keys use the
-// game's industry strings (see T5_JOBS / era-events conds); '互联网平台'
-// is accepted as an alias of '互联网'.
-// OPEN (2023 教培）: the recheck says "+5pp for 互联网/部分教培" — WHICH
-// 教培 counts as "部分" is unresolved; the table currently applies +5 to
-// 教培 as a whole. Pending Allen's call.
+// Macro correction Y by crisis year (pp). WorkBuddy 复审 2026-11-18 修订
+// （ChatGPT 原值 2021 0 / 2022 +3 / 2023 0 已废）：2021 双减 7 月落地，
+// 教培年底离职率 71%，Q4 大厂裁员已启动，Y=0 明显失真 → +2；2022 纯
+// 互联网职位量同比 −50.4%，全年裁员最重 → +5；2023 裁员延续但放缓
+// （阿里一年 −1.9 万）→ +1。Y 是游戏平衡参数 [待 playtest]，不是
+// 失业率换算。表只定义 2021–2023；表外年份显式默认 0（见下）。
+const T9_YEAR_ADJUSTMENT = { 2021: 2, 2022: 5, 2023: 1 };
+// Industry correction I by crisis year + industry (pp). WorkBuddy 复审
+// 2026-11-18 修订（原值 2021 互联网 +5 / 教培 +8、2023 教培 +5 已废）：
+// 2021 教培 +12（双减 7 月落地，Q4 大厂裁员还没全面启动，所以互联网
+// 只 +3）；2022 互联网 +5（职位量同比 −50.4%，2022 年互联网裁员最重）、
+// 线下服务 +8（疫情三季冲击；2021 没给线下服务修正，是因为疫情首年
+// 4–5 月后已复苏，6–12 月不该再加）、教培 +8；2023 教培 +2（尾部 /
+// 恢复期值——双减已满两年，存量人员已出清或转行，不再是 +5 的冲击值；
+// 之前 OPEN 注释里的“部分教培”未定义，2023 教培的修正值统一取 +2）。
+// I 是游戏平衡参数 [待 playtest]，不是失业率换算。
+// 表外年份显式默认 0（v1.1 显式规则）：T9 年份 = 高考年 + 8，覆盖
+// 2018–2026，但表只定义 2021–2023；不在表里的年份，年修正与行业修正
+// 都取 0（见下面 t9YearAdjustment / t9IndustryAdjustment 的 || 0 /
+// return 0——那是这条规则的执行，不是隐式 fallback）。
 // NOTE (reachability): the game's current T5 jobs only produce
 // 互联网/体制内/本地服务/创业公司 as jobIndustry, so the 教培/线下服务
 // rows are unreachable until the job/industry vocabulary is aligned.
 const T9_INDUSTRY_ADJUSTMENT = {
-  2021: { '互联网': 5, '教培': 8 },
+  2021: { '互联网': 3, '教培': 12 },
   2022: { '互联网': 5, '线下服务': 8, '教培': 8 },
-  2023: { '互联网': 5, '教培': 5 },
+  2023: { '互联网': 5, '教培': 2 },
 };
 function t9YearAdjustment(crisisYear) { return T9_YEAR_ADJUSTMENT[crisisYear] || 0; }
 function t9IndustryAdjustment(crisisYear, industry) {
@@ -629,11 +646,19 @@ function eraLogForTurn(state, turn) {
 
 // ---- P1 (d): H0 tamper conditions (design v6 §H0 与志愿篡改) ----
 // H0 stays the birth-family intervention tendency (an initial parameter
-// only). Tampering needs ALL of: a strong H0 (>= 60), a parent who
-// actually holds the account, a system that allows it, and no
-// self-confirmation by the player yet. The remedy window is the T1 pick
-// itself: picking anything confirms the player's own填报 and ends the
-// tamper (game.js sets flags.t1Confirmed on pick).
+// only). Tampering needs ALL of: a strong H0 (>= H0_TAMPER_THRESHOLD), a
+// parent who actually holds the account, a system that allows it, and no
+// SUBMITTED confirmation by the player yet. Two levels (WorkBuddy 复审
+// 2026-11-18, v1.1): choosing a major/stance on the T1 screen is only a
+// draft (flags.t1ChoiceMade) — it does NOT confirm; only the explicit
+// 提交确认 button sets flags.t1Confirmed. A draft-only player is still
+// exposed; a fully submitted player is protected. The remedy window is
+// the T1 pick itself: submitting confirms the player's own填报 and ends
+// the tamper (game.js sets flags.t1Confirmed on t1-confirm).
+// Tamperer is PARENTS ONLY (Allen 2026-11-20 定：篡改者只写家长，不加
+// 篡改者字段）。同学 / 老师篡改志愿有真实例子，但那是另一条统计（刑事
+// 案件里同学 / 老师占主导，家长约 0——家长改志愿是家内事，不进刑事
+// 统计；戴柳 / 张来玉等家长改志愿案子另有记录），不进本机制。
 // Account access by family structure: a present parent holds it; a
 // grandparent guardian (absentBoth) or no parent at all (orphan) does not.
 // System by year: before 2013填报 was largely onsite (school computer
@@ -641,6 +666,9 @@ function eraLogForTurn(state, turn) {
 // person. From 2013 the online account is enough: whoever holds the
 // password can change it. (Game simplification; the exact provincial
 // switch year varies. 2026 UI logic is never applied to 2010 as-is.)
+// [PLACEHOLDER] H0_TAMPER_THRESHOLD 60 ≈ “家长深度介入型家庭”——假设值，
+// 需 playtest 验证触发率 5–15%（见本文件顶部“数值来源标记”）。
+const H0_TAMPER_THRESHOLD = 60;
 const H0_ACCOUNT_ACCESS = { model: true, absentFather: true, absentMother: true, absentBoth: false, orphan: false, npd: true };
 function h0SystemForYear(examYear) {
   return examYear < 2013 ? 'onsite' : 'online';
@@ -653,13 +681,17 @@ function h0TamperFactors(state) {
     h0: h0 ? h0.value : 0,
     parentsHaveAccount: H0_ACCOUNT_ACCESS[familyKey] === true,
     system: h0SystemForYear(examYear),
+    // playerConfirmed = SUBMITTED confirmation (t1-confirm), not the
+    // draft choice. choiceMade = a stance was picked on the T1 screen
+    // but not yet submitted. Draft-only still counts as tampered.
     playerConfirmed: !!(state.flags && state.flags.t1Confirmed),
+    choiceMade: !!(state.flags && state.flags.t1ChoiceMade),
     remedyAvailable: true,
   };
 }
 function isH0Tampered(state) {
   const f = h0TamperFactors(state);
-  return f.h0 >= 60 && f.parentsHaveAccount && !f.playerConfirmed;
+  return f.h0 >= H0_TAMPER_THRESHOLD && f.parentsHaveAccount && !f.playerConfirmed;
 }
 
 // Unified era context (recheck general opinion): every era lookup reads
@@ -724,15 +756,20 @@ function civilServiceStats(year) {
   };
 }
 // 考公吸引力权重 (0-100, NOT a measured probability) by decision year.
-// Non-monotonic by design (2024-2026 dips to 72 after 75). Outside the
-// table the function returns null (2027+ is fictional — no band).
+// Monotonic by design (v1.1, WorkBuddy 复审 2026-11-18): 2024–2026 档
+// 78——热度继续上行而非回落（原 72 已废）。国考过审人数 2024 303.3 万、
+// 2025 341.6 万、2026 371.8 万，竞争比 41:1 → 74:1，录取率 1.1%，
+// 是 2010 年代后期唯一比 2009 年高考（5.98%）更难的考试；2022 届
+// 本科生“最优解”、2023 届 60% 以上想考、2024 届“近半数毕业就考公”，
+// 中间年份没有回落拐点。Outside the table the function returns null
+// (2027+ is fictional — no band).
 const CIVIL_SERVICE_APPEAL_BANDS = [
   { from: 2010, to: 2013, appeal: 55 },
   { from: 2014, to: 2016, appeal: 58 },
   { from: 2017, to: 2019, appeal: 62 },
   { from: 2020, to: 2021, appeal: 68 },
   { from: 2022, to: 2023, appeal: 75 },
-  { from: 2024, to: 2026, appeal: 72 },
+  { from: 2024, to: 2026, appeal: 78 },
 ];
 function civilServiceAppeal(decisionYear) {
   const band = CIVIL_SERVICE_APPEAL_BANDS.find((b) => decisionYear >= b.from && decisionYear <= b.to);
@@ -760,17 +797,25 @@ function civilServiceNarrative(decisionYear) {
 // Each band lists the channels in primacy order (first = primary).
 // 微信 was NOT the default in 2011 (launched Jan 2011, >200M registered
 // users only Sep 2012); QQ still dominated 2010-2011 (~79.4% usage Jun
-// 2011). 人人网 stayed active 2011-2013; 微博 had 309M users by end
-// 2012. 短信 is never deleted after 2013 (still used for notices and
-// verification). 抖音 is a content channel (launched Sep 2016, popular
-// after 2017) — no 抖音 DM / live-commerce in 2015.
+// 2011). 人人网 stayed active 2011-2013; 微博 from 2010 (launched Aug
+// 2009, mainstream by 2010 — the 2006–2010 band is split into 2006–2009
+// without it and a 2010-only band with it, so 2010 is the exact start).
+// 开心网 2008–2012 (peak ~2010) sits in 2006–2009 and 2010. 陌陌 from
+// 2013 (launched Aug 2011, mainstream 2013). 小红书 from 2017 (launched
+// 2013, mainstream as a social channel 2017+). 短信 is never deleted
+// after 2013 (still used for notices and verification). 抖音 is a
+// content channel (launched Sep 2016, popular after 2017) — no 抖音 DM /
+// live-commerce in 2015. Bands are cut on integer calendar years:
+// npcContactForYear is called with examYear-onward calendar years
+// (2008+) and gradYear, so a 2010-only band behaves correctly.
 const NPC_CONTACT_PERIODS = [
   { from: 2000, to: 2005, channels: ['QQ', '短信', '电话', '邮件', '论坛'] },
-  { from: 2006, to: 2010, channels: ['QQ', 'QQ空间', '人人', '博客', '短信', '电话', '邮件'] },
+  { from: 2006, to: 2009, channels: ['QQ', 'QQ空间', '人人', '开心网', '博客', '短信', '电话', '邮件'] },
+  { from: 2010, to: 2010, channels: ['QQ', 'QQ空间', '人人', '开心网', '博客', '微博', '短信', '电话', '邮件'] },
   { from: 2011, to: 2012, channels: ['QQ', '短信', '电话', '微博', '早期微信', '人人'] },
-  { from: 2013, to: 2014, channels: ['微信', 'QQ', '短信', '电话', '微博', '邮件'] },
+  { from: 2013, to: 2014, channels: ['微信', 'QQ', '短信', '电话', '微博', '邮件', '陌陌'] },
   { from: 2015, to: 2016, channels: ['微信', 'QQ', '短信', '电话', '微博', '邮件', '陌陌', '钉钉', '脉脉'] },
-  { from: 2017, to: 2019, channels: ['微信', 'QQ', '短信', '电话', '微博', '邮件', '陌陌', '钉钉', '脉脉', '企业微信', '抖音'] },
+  { from: 2017, to: 2019, channels: ['微信', 'QQ', '短信', '电话', '微博', '邮件', '陌陌', '钉钉', '脉脉', '企业微信', '抖音', '小红书'] },
   { from: 2020, to: 2026, channels: ['微信', 'QQ', '短信', '电话', '微博', '邮件', '陌陌', '钉钉', '脉脉', '企业微信', '抖音', '飞书', '小红书'] },
 ];
 function npcContactForYear(year) {
@@ -792,13 +837,19 @@ function npcInstantChannel(year) {
 // Chinese firms — not a replacement for foreign firms' China jobs
 // (local posts, regional HQ, R&D / manufacturing / finance / supply
 // chain / compliance). 2018+ is "分化为主，伴随局部收缩和转型".
+// v1.1 (WorkBuddy 复审 2026-11-18): the peak is moved earlier —
+// 2014–2017 78 (not 90) and 2018–2020 75 (not 80). The foreign-firm
+// halo peaked 2005–2012; from 2014 internet giants' total packages
+// overtook foreign firms', and the 2015–16 manufacturing exodus
+// (Suzhou / Dongguan / Shanghai factory closures) removed the
+// factory-side channel. 2015–16 was the inflection, not the peak.
 // Differentiation by city / major / language / industry / player
 // initiative is later work, not faked here.
 // Returns { weight, fictional } — 2027+ is fictional (no band).
 const FOREIGN_FIRM_VISIBILITY_BANDS = [
   { from: 2010, to: 2013, weight: 80 },
-  { from: 2014, to: 2017, weight: 90 },
-  { from: 2018, to: 2020, weight: 80 },
+  { from: 2014, to: 2017, weight: 78 },
+  { from: 2018, to: 2020, weight: 75 },
   { from: 2021, to: 2022, weight: 70 },
   { from: 2023, to: 2024, weight: 75 },
   { from: 2025, to: 2026, weight: 75 },
@@ -808,6 +859,78 @@ function foreignFirmVisibility(entryYear) {
   if (band) return { weight: band.weight, fictional: false };
   if (entryYear < FOREIGN_FIRM_VISIBILITY_BANDS[0].from) return { weight: FOREIGN_FIRM_VISIBILITY_BANDS[0].weight, fictional: false };
   return { weight: null, fictional: true };
+}
+
+// --- P1 (b): 创业年代技术表 (WorkBuddy 复审 2026-11-18, v1.1) ---
+// The venture "era adapter": when a player starts a venture in a given
+// calendar year, tech that did not exist yet is NOT silently overwritten
+// and the player's wish is NOT negated — the confirm screen shows what
+// was available then and the player chooses keep-or-adapt (three
+// principles: 不否定玩家愿望 / 不自动覆盖 / 由玩家确认；see game.js
+// idea-start → renderIdeaConfirm → idea-confirm). The table is the
+// data; adaptVentureTech is the detector; the UI lives in game.js.
+// Segments (year = calendar year of the venture start):
+//   2010–12 规则 / 关键词 / 传统 ML (rules, keyword matching, classic ML)
+//   2013–15 传统 NLP / 推荐 + 移动互联网 / 公众号 / O2O；词向量
+//            (word2vec, released 2013) belongs to this segment
+//   2016–18 深度学习 NLP + 短视频 / 直播电商 / 小程序；区块链
+//            2017–18 一波可选 (optional, not the segment's core)
+//   2019–21 BERT (pretrained transformers)
+//   2022–23 ChatGPT 式生成式 AI (late 2022 onward; year granularity —
+//            a 2022 venture is treated as able to use late-2022 tech,
+//            since the game tracks years, not months)
+//   2024–26 RAG / Agent (retrieval-augmented + agentic systems)
+//   2027+  架空 (fictional — no adaptation needed; any tech goes)
+// Pre-2010 years clamp to the first segment (the game starts 2010, but
+// the function must not break on earlier years).
+const VENTURE_TECH_SEGMENTS = [
+  { from: 2010, to: 2012, label: '规则 / 关键词 / 传统 ML', tech: ['规则引擎', '关键词匹配', '传统机器学习', '决策树', '逻辑回归'], note: '没有深度学习，也没有移动互联网红利。' },
+  { from: 2013, to: 2015, label: '传统 NLP / 推荐 + 移动互联网', tech: ['传统 NLP', '推荐系统', '词向量', '微信公众号', 'O2O', '移动互联网'], note: '词向量（word2vec）2013 年发布，放在这一段。' },
+  { from: 2016, to: 2018, label: '深度学习 NLP + 短视频 / 直播电商', tech: ['深度学习', '短视频', '直播电商', '小程序', '深度学习 NLP'], note: '区块链 2017–18 一波可选，不作主线。' },
+  { from: 2019, to: 2021, label: 'BERT 时代', tech: ['BERT', '预训练模型', 'Transformer'], note: '预训练 + 微调成为主流。' },
+  { from: 2022, to: 2023, label: 'ChatGPT 式生成式 AI', tech: ['生成式 AI', '大模型', 'ChatGPT', '对话机器人'], note: '2022 末 ChatGPT 发布；按年粒度，2022 年的创业视为可用 2022 末的技术（一年只记年份，不分月）。' },
+  { from: 2024, to: 2026, label: 'RAG / Agent', tech: ['RAG', 'Agent', '智能体', '检索增强'], note: '检索增强 + 智能体成为创业主线。' },
+  { from: 2027, to: 9999, label: '架空', tech: [], note: '2027+ 为架空年份，任何技术都可用，不做年代适配。' },
+];
+// The segment for a calendar year. Pre-2010 clamps to the first segment;
+// 2027+ returns the fictional segment (tech: [] = no adaptation).
+function ventureTechForYear(year) {
+  for (const s of VENTURE_TECH_SEGMENTS) {
+    if (year >= s.from && year <= s.to) return s;
+  }
+  return year < 2010 ? VENTURE_TECH_SEGMENTS[0] : VENTURE_TECH_SEGMENTS[VENTURE_TECH_SEGMENTS.length - 1];
+}
+// Earliest year each tech keyword becomes available (the year a venture
+// in that year can first rely on it). Keywords not in this list (plain
+// ideas like 奶茶店） never trigger. Matching is substring-based on the
+// player's free text, case-insensitive for the Latin tokens (RAG / BERT /
+// ChatGPT / word2vec). Year granularity: a keyword dated to year Y is
+// available to ventures in year Y and later.
+const VENTURE_TECH_EARLIEST = [
+  { re: /ChatGPT|生成式|大模型|生成式\s*AI|GPT/i, year: 2022, name: '生成式 AI' },
+  { re: /RAG|Agent|智能体|检索增强/i, year: 2024, name: 'RAG / Agent' },
+  { re: /BERT|预训练|Transformer/i, year: 2019, name: 'BERT' },
+  { re: /深度学习|deep\s*learning/i, year: 2016, name: '深度学习' },
+  { re: /短视频|直播|抖音|小程序/i, year: 2016, name: '短视频 / 直播' },
+  { re: /区块链|blockchain/i, year: 2017, name: '区块链' },
+  { re: /公众号|O2O|移动互联网|推荐系统|推荐算法/i, year: 2013, name: '移动互联网 / 推荐' },
+  { re: /词向量|word2vec/i, year: 2013, name: '词向量' },
+];
+// Detect era-unavailable tech in a venture idea for a calendar year.
+// Returns { needed, requested, segment, available }: needed = false when
+// nothing in the text is era-unavailable (plain ideas, or tech that
+// already existed that year, or the fictional 2027+ segment). requested
+// = the unavailable tech names found; segment = the year's segment;
+// available = that segment's tech list (the replacement options).
+function adaptVentureTech(text, year) {
+  const segment = ventureTechForYear(year);
+  if (segment.label === '架空') return { needed: false, requested: [], segment, available: [] };
+  const requested = [];
+  for (const k of VENTURE_TECH_EARLIEST) {
+    if (k.year > year && k.re.test(text)) requested.push(k.name);
+  }
+  if (requested.length === 0) return { needed: false, requested: [], segment, available: [] };
+  return { needed: true, requested, segment, available: segment.tech.slice() };
 }
 
 if (typeof module !== 'undefined') {
@@ -828,7 +951,7 @@ if (typeof module !== 'undefined') {
     t9Branch, T9_BRANCH_LABEL,
     FUTURE_TRENDS, futureTrendsForYear, quietYearScenario, generateFictionalScenario,
     futureScenarioForYear, applyFutureForTurn,
-    H0_ACCOUNT_ACCESS, h0SystemForYear, h0TamperFactors, isH0Tampered,
+    H0_ACCOUNT_ACCESS, H0_TAMPER_THRESHOLD, h0SystemForYear, h0TamperFactors, isH0Tampered,
     ERA_MAJOR_DEMAND, ERA_MAJOR_DEMAND_DEFAULT, demandPremiumForMajor,
     bestReachableMajorInTier, resolveMajorInTier, simulateSchoolTier, offCampusFallback,
     eraContextFor,
@@ -837,5 +960,6 @@ if (typeof module !== 'undefined') {
     CIVIL_SERVICE_NARRATIVES, civilServiceNarrative,
     NPC_CONTACT_PERIODS, npcContactForYear, npcInstantChannel,
     FOREIGN_FIRM_VISIBILITY_BANDS, foreignFirmVisibility,
+    VENTURE_TECH_SEGMENTS, VENTURE_TECH_EARLIEST, ventureTechForYear, adaptVentureTech,
   };
 }

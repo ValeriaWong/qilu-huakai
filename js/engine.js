@@ -466,6 +466,13 @@ function startVenture(state, text, archetype, opts) {
     v.aiReviewed = true;
     v.aiNote = String(opts.aiNote || '').slice(0, 120);
   }
+  if (opts.eraAdapted) {
+    // v1.1 (b) 年代适配：玩家在确认屏上主动选了“换成当时能用的技术”
+    // （era.js adaptVentureTech 检出 + game.js 询问，见 idea-confirm）。
+    // 只记一个标记和一句话说明，不改玩家写的项目名和愿望本身。
+    v.eraAdapted = true;
+    v.eraTechNote = String(opts.eraTechNote || '').slice(0, 140);
+  }
   if (opts.validateOnly) {
     state.ventures.push(v);
     return { ok: true, venture: v, validating: true };

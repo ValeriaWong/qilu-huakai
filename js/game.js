@@ -555,6 +555,11 @@ function screenT1() {
       <button class="opt" data-act="t1-pick" data-id="insist"><b>坚持自己</b><span>就报你上面写的专业。${era ? '录取看档位，不看专业。' : '分够参考线才能进，差分会调剂。'}家庭线 −1。${era ? 'k 由档位定；三本且家庭现金 < 8 万时需自挣学费（T2–T5 每年 −1 AP）。' : '专业系数 k = 1.3；家庭经济 ≤2 档时需自挣学费（T2–T5 每年 −1 AP）。'}</span></button>
       <button class="opt" data-act="t1-pick" data-id="negotiate"><b>谈判，折中</b><span>还是报你写的专业，${era ? 'k 由档位定，' : '但 k = 1.0，'}留一个以后再谈的口子。</span></button>
     </div>
+    ${G.t1DraftChoice ? `<div class="card">
+      <p><b>你选了「${esc(T1_DRAFT_LABEL[G.t1DraftChoice] || G.t1DraftChoice)}」</b>${G.t1DraftMajor ? `，专业「${esc(G.t1DraftMajor)}」` : ''}——这只是草稿，还没提交。</p>
+      <p>${tampered ? '还没提交确认，志愿仍可能被改：点提交确认，才算你自己定下来。' : '点提交确认，才算你自己定下来；想改就点重新选。'}</p>
+      <p><button class="opt" data-act="t1-confirm">提交确认</button> <button class="opt" data-act="t1-redraft">重新选</button></p>
+    </div>` : ''}
     <p class="muted">承诺卡 A（志愿，T2–T4 兑现，T5 回顾）：专业锁定 8 年，${era ? '专业系数 k 由录取档位定。档位线是真实历史控制线。' : '决定专业成长系数 k。参考线是游戏内的简化线，不是真实投档线。'}</p>`);
   const inp = $('#t1-major');
   if (inp) inp.addEventListener('input', () => { G.t1MajorDraft = inp.value; updateT1MajorLine(); });
@@ -637,10 +642,30 @@ function t1DiagnosisHtml() {
   return lines.join('');
 }
 
+const T1_DRAFT_LABEL = { obey: '听父母的', insist: '坚持自己', negotiate: '谈判折中' };
+
+// v1.1 (d): two-level T1 confirm. Clicking a stance button only DRAFTS
+// the choice (G.t1DraftChoice + flags.t1ChoiceMade) — it does not confirm.
+// The player submits explicitly with t1-confirm, which calls pickT1.
+// Draft-only still counts as tampered (see isH0Tampered in era.js);
+// only a submitted pick is protected. The major input is synced into
+// G.t1MajorDraft first so the re-render keeps what the player typed.
+function draftT1(choice) {
+  const s = G.state;
+  const wanted = ($('#t1-major') ? $('#t1-major').value : '').trim().slice(0, 20);
+  if (choice !== 'obey' && !wanted) { alert('先写你想报的专业，再选这个。'); return; }
+  if (wanted) G.t1MajorDraft = wanted;
+  G.t1DraftChoice = choice;
+  G.t1DraftMajor = choice === 'obey' ? '省内师范' : wanted;
+  s.flags.t1ChoiceMade = true;
+  screenT1();
+}
+
 function pickT1(choice) {
   const s = G.state, a = s.attrs;
-  // P1 (d): any pick is the player confirming their own填报 — the remedy
-  // window for an H0 tamper closes here.
+  // P1 (d) v1.1: only the explicit 提交确认 (t1-confirm) confirms the
+  // player's own填报 — the remedy window for an H0 tamper closes here,
+  // not on the draft pick. Draft-only players are still exposed.
   s.flags.t1Confirmed = true;
   const wanted = ($('#t1-major') ? $('#t1-major').value : '').trim().slice(0, 20);
   const stanceK = { obey: 1.0, insist: 1.3, negotiate: 1.0 }[choice];
@@ -654,6 +679,9 @@ function pickT1(choice) {
     intended = wanted;
     source = 'self';
   }
+  // Submitted: the draft is spent.
+  G.t1DraftChoice = null;
+  G.t1DraftMajor = null;
   // v0.6: era runs resolve by tier (resolveEraAdmission); legacy runs
   // keep the 2026 per-major resolver.
   const adm = (s.flags.gaokao && s.flags.gaokao.era) ? resolveEraAdmission(s, intended) : resolveAdmission(s, intended, stanceK);
@@ -1936,11 +1964,20 @@ function renderIdeaConfirm() {
     verdictHtml = `<p class="muted">AI 没连上（${esc(p.aiError)}），先按关键词分类开线。</p>`;
   }
   const canDirect = !(v && !v.reasonable);
+  // v1.1 (b): era mismatch panel — shown only when the adapter found
+  // tech that did not exist in the venture's year. The player picks
+  // keep (default: use it as written) or adapt (swap to the era's tech).
+  let eraHtml = '';
+  if (p.eraAdapt && p.eraAdapt.needed) {
+    eraHtml = `<p class="warn">年代提醒：你写的「${esc(p.eraAdapt.requested.join('、'))}」在 ${p.eraYear} 年还不存在。当时能用的是：${esc(p.eraAdapt.available.join('、'))}。你的原意不变，只换技术——换还是不换，你定。</p>
+      <p>年代适配：<select id="idea-era-adapt"><option value="keep" selected>就按我写的来</option><option value="adapt">换成当时能用的技术</option></select></p>`;
+  }
   setScreen(`
     <h1>确认一下这条线</h1>
     <div class="card big">
       <p>你的原话：“${esc(p.text)}”</p>
       <p>系统识别为：<b>${esc(arch.name)}</b>${p.themes.length ? ' · 主题：' + p.themes.map((t) => esc(t)).join('、') : ''}</p>
+      ${eraHtml}
       <p>如果分错了，换一个：<select id="idea-arch">${archOptions}</select></p>
       <p id="idea-arch-detail"></p>
       ${verdictHtml}
@@ -2093,7 +2130,9 @@ document.addEventListener('click', (e) => {
       screenT1();
       break;
     }
-    case 't1-pick': pickT1(id); break;
+    case 't1-pick': draftT1(id); break;
+    case 't1-confirm': if (G.t1DraftChoice) pickT1(G.t1DraftChoice); break;
+    case 't1-redraft': G.t1DraftChoice = null; G.t1DraftMajor = null; G.state.flags.t1ChoiceMade = false; screenT1(); break;
     case 'year-start': startYear(2); break;
     case 'year-next': startYear(Number(id)); break;
     case 'event-pick': pickEvent(Number(id)); break;
@@ -2105,7 +2144,13 @@ document.addEventListener('click', (e) => {
       // "这不是一条创业线" panel, never the archetype picker.
       const nv = nonVentureReason(text, VENTURE_ARCHETYPES);
       const themes = ventureThemes(text, THEME_KEYWORDS);
-      G.pendingIdea = { text, archId: arch.id, themes, explanation: '', aiReviewing: false, aiVerdict: null, aiError: '', nonVenture: nv ? nv.kind : '', nonVentureReason: nv ? nv.reason : '' };
+      // v1.1 (b): the era adapter runs here — the venture's calendar year
+      // comes from eraContextFor (examYear + turn − 1), and adaptVentureTech
+      // detects tech that did not exist yet. Nothing is overwritten here;
+      // the confirm screen shows the mismatch and the player chooses.
+      const eraYear = eraContextFor(G.state, G.state.turn).calendarYear;
+      const eraAdapt = adaptVentureTech(text, eraYear);
+      G.pendingIdea = { text, archId: arch.id, themes, explanation: '', aiReviewing: false, aiVerdict: null, aiError: '', nonVenture: nv ? nv.kind : '', nonVentureReason: nv ? nv.reason : '', eraAdapt, eraYear, eraAdaptChoice: 'keep' };
       renderIdeaConfirm();
       break;
     }
@@ -2152,6 +2197,13 @@ document.addEventListener('click', (e) => {
         opts.aiReviewed = true;
         opts.aiNote = v.reason;
       }
+      // v1.1 (b): only when the player picked "adapt" on the era panel —
+      // keep is the default, and the note records what was swapped.
+      const eraSel = $('#idea-era-adapt');
+      if (G.pendingIdea && G.pendingIdea.eraAdapt && G.pendingIdea.eraAdapt.needed && eraSel && eraSel.value === 'adapt') {
+        opts.eraAdapted = true;
+        opts.eraTechNote = `${G.pendingIdea.eraAdapt.requested.join('、')} 在 ${G.pendingIdea.eraYear} 年还不存在，已换成当时能用的技术：${G.pendingIdea.eraAdapt.available.join('、')}`;
+      }
       const r = startVenture(G.state, text, arch, opts);
       if (!r.ok) { alert(r.error); break; }
       const vv = r.venture;
@@ -2164,6 +2216,7 @@ document.addEventListener('click', (e) => {
         <div class="card big"><h2>${esc(vv.name)}</h2>
           <p>${esc(arch.name)} · 启动 ${vv.cost} 万已付 · 风险：${esc(arch.risk)}</p>
           ${vv.aiReviewed ? `<p>AI 审核：${esc(vv.aiNote)}</p>` : ''}
+          ${vv.eraAdapted ? `<p>年代适配：${esc(vv.eraTechNote)}</p>` : ''}
           <p>里程碑：${arch.milestones.map((m, i) => `${i + 1}. ${esc(m.name)}（${esc(rewardText(m.reward))}）`).join('；')}</p>
           <p>跑通后每年：${esc(rewardText(arch.running))}。</p>
           <p class="muted">你的原话写进了这条线：“${esc(vv.text.slice(0, 60))}”。每年花 1 AP 推进，推进那一刻就封存结果，结算时只读档。</p>
@@ -2187,6 +2240,13 @@ document.addEventListener('click', (e) => {
         opts.aiReviewed = true;
         opts.aiNote = v.reason;
       }
+      // v1.1 (b): same era choice as idea-confirm — adapt only when the
+      // player picked it on the era panel.
+      const eraSelV = $('#idea-era-adapt');
+      if (G.pendingIdea && G.pendingIdea.eraAdapt && G.pendingIdea.eraAdapt.needed && eraSelV && eraSelV.value === 'adapt') {
+        opts.eraAdapted = true;
+        opts.eraTechNote = `${G.pendingIdea.eraAdapt.requested.join('、')} 在 ${G.pendingIdea.eraYear} 年还不存在，已换成当时能用的技术：${G.pendingIdea.eraAdapt.available.join('、')}`;
+      }
       const r = startVenture(G.state, text, arch, opts);
       if (!r.ok) { alert(r.error); break; }
       const vv = r.venture;
@@ -2198,6 +2258,7 @@ document.addEventListener('click', (e) => {
         <div class="card big"><h2>${esc(vv.name)}</h2>
           <p>验证中，不花钱：${esc(arch.validation)}</p>
           ${vv.aiReviewed ? `<p>AI 审核：${esc(vv.aiNote)}</p>` : ''}
+          ${vv.eraAdapted ? `<p>年代适配：${esc(vv.eraTechNote)}</p>` : ''}
           ${v && !v.reasonable ? `<p>AI 的看法：${esc(v.reason)}</p>` : ''}
           <p class="muted">每年花 1 AP 推进验证，通过后再付启动费 ${vv.cost} 万正式开干。你的原话：“${esc(vv.text.slice(0, 60))}”。</p>
         </div>
