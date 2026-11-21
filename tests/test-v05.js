@@ -48,7 +48,7 @@ const sandbox = {
   })(),
 };
 vm.createContext(sandbox);
-for (const f of ['rng.js', 'data.js', 'gaokao-lines.js', 'era-events.js', 'era.js', 'engine.js', 'ai-review.js', 'analytics.js', 'game.js']) {
+for (const f of ['rng.js', 'data.js', 'interpersonal.js', 'stocks.js', 'gaokao-lines.js', 'era-events.js', 'era.js', 'engine.js', 'ai-review.js', 'analytics.js', 'game.js']) {
   vm.runInContext(fs.readFileSync(path.join(REPO, 'js', f), 'utf8'), sandbox, { filename: f });
 }
 const ctx = (code) => vm.runInContext(code, sandbox);
@@ -79,7 +79,7 @@ function setGaokao(base, bonus) {
   const E = ctx('({ majorAdmissionLine, bestReachableMajor, resolveAdmission })');
   check('major line: 会计 532', E.majorAdmissionLine('会计', 442) === 532);
   check('major line: 临床医学 602', E.majorAdmissionLine('临床医学', 442) === 602);
-  check('major line: 艺术设计 sits on 一段线', E.majorAdmissionLine('艺术设计', 442) === 442);
+  check('major line: 艺术设计 sits at 331 (75% of 一段线, §9.16)', E.majorAdmissionLine('艺术设计', 442) === 331);
   check('major line: unlisted major uses default +60', E.majorAdmissionLine('天体物理', 442) === 502);
   check('best reachable at 500 is 土木', E.bestReachableMajor(500, 442) === '土木');
   check('best reachable at 442 is 艺术设计', E.bestReachableMajor(442, 442) === '艺术设计');
@@ -102,7 +102,7 @@ function setGaokao(base, bonus) {
   {
     const g = ctx('G.state.flags.gaokao');
     check('score rolled region-relative (Shandong 422-662)', g.base >= 422 && g.base <= 662, 'base=' + g.base);
-    check('T1 shows Shandong 2026 policy', screenHtml().includes('山东 2026') && screenHtml().includes('一段线 442') && screenHtml().includes('特殊类型线 525') && screenHtml().includes('96 个'));
+    check('T1 shows Shandong 2026 policy', screenHtml().includes('山东 2026') && screenHtml().includes('一段线 442') && screenHtml().includes('特殊类型批已取消') && screenHtml().includes('96 个'));
     check('score survives re-render', (() => { const b = g.base; ctx('screenT1();'); return ctx('G.state.flags.gaokao').base === b; })());
   }
 

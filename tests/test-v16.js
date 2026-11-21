@@ -74,7 +74,7 @@ const sandbox = {
   })(),
 };
 vm.createContext(sandbox);
-for (const f of ['rng.js', 'data.js', 'gaokao-lines.js', 'era-events.js', 'era.js', 'engine.js', 'ai-review.js', 'analytics.js', 'game.js']) {
+for (const f of ['rng.js', 'data.js', 'interpersonal.js', 'stocks.js', 'gaokao-lines.js', 'era-events.js', 'era.js', 'engine.js', 'ai-review.js', 'analytics.js', 'game.js']) {
   vm.runInContext(fs.readFileSync(path.join(REPO, 'js', f), 'utf8'), sandbox, { filename: f });
 }
 const ctx = (code) => vm.runInContext(code, sandbox);
@@ -360,10 +360,13 @@ function importCurrentCode() {
     G.pickedSlot = 2;`);
   sandbox.__confirms.length = 0;
   click('reset');
+  check('V16-37b P0-4 reset first click only arms (save still there)', ctx('loadGame(2)') !== null && ctx('G.resetArmed') === true);
+  check('V16-41 P0-4 reset armed button says confirm again', screenHtml().includes('再点一次确认清除'));
+  click('reset');
   check('V16-38 P0-4 reset clears only the current slot (2 empty)', ctx('loadGame(2)') === null);
   check('V16-39 P0-4 reset leaves the other slot alone (1 still 40 万）', ctx('loadGame(1)') && ctx('loadGame(1).attrs.money') === 40);
   check('V16-40 P0-4 reset does not clear global meta (lessons + npcMemory)', ctx(`loadMeta().lessons && loadMeta().lessons.E && loadMeta().lessons.E.text`) === '教训' && ctx(`loadMeta().npcMemory && loadMeta().npcMemory.wang && loadMeta().npcMemory.wang.trust`) === 80);
-  check('V16-41 P0-4 reset dialog says the other slots and shared data survive', sandbox.__confirms.some((m) => m.includes('其他周目位') && m.includes('不受影响')));
+  check('V16-41b P0-4 reset does not use a native confirm dialog', sandbox.__confirms.length === 0);
 }
 
 // ---------- P1-1: NPC 行为驱动 ----------

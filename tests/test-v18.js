@@ -73,7 +73,7 @@ const sandbox = {
   })(),
 };
 vm.createContext(sandbox);
-for (const f of ['rng.js', 'data.js', 'gaokao-lines.js', 'era-events.js', 'era.js', 'engine.js', 'ai-review.js', 'analytics.js', 'game.js']) {
+for (const f of ['rng.js', 'data.js', 'interpersonal.js', 'stocks.js', 'gaokao-lines.js', 'era-events.js', 'era.js', 'engine.js', 'ai-review.js', 'analytics.js', 'game.js']) {
   vm.runInContext(fs.readFileSync(path.join(REPO, 'js', f), 'utf8'), sandbox, { filename: f });
 }
 const ctx = (code) => vm.runInContext(code, sandbox);
@@ -216,28 +216,31 @@ function toT5Exam() {
   check('V18-03 省考先进省份屏', screenHtml().includes('选省份') && screenHtml().includes('山东'));
   click('exam-province', 'shandong');
   check('V18-03b 选省后进职位屏', screenHtml().includes('选职位'));
-  check('V18-04 省份修正改笔试门槛：山东基层 30、吉林基层 20、国考基层 30',
+  check('V18-04 省份修正改笔试门槛：山东基层 30、吉林基层 20、国考基层 25（国考 +5 已取消，§9.8）',
     ctx(`civilExamThresholds({ type: 'provincial', provinceId: 'shandong', positionId: 'grassroots' }).written`) === 30
     && ctx(`civilExamThresholds({ type: 'provincial', provinceId: 'jilin', positionId: 'grassroots' }).written`) === 20
-    && ctx(`civilExamThresholds({ type: 'national', provinceId: null, positionId: 'grassroots' }).written`) === 30
+    && ctx(`civilExamThresholds({ type: 'national', provinceId: null, positionId: 'grassroots' }).written`) === 25
     && ctx(`civilExamThresholds({ type: 'national', provinceId: null, positionId: 'grassroots' }).interview`) === 20);
-  // 笔试落榜：专业 20，国考基层笔试 30。
+  // 笔试落榜：专业 20，国考基层笔试 25（minRng 钉死：笔试 20+0 未过线）。
   toT5Exam();
   click('exam-type', 'national');
   click('exam-position', 'grassroots');
   click('exam-confirm');
-  check('V18-05a 报名屏写明门槛与自身数值', screenHtml().includes('笔试门槛 30') && screenHtml().includes('你的专业 20'));
+  check('V18-05a 报名屏写明门槛与自身数值', screenHtml().includes('笔试门槛 25') && screenHtml().includes('你的专业 20'));
+  ctx('G.rng = (' + minRng.toString() + ')()');
   click('exam-written');
   check('V18-05b 笔试落榜：落榜屏 + 改报入口', screenHtml().includes('笔试没过线') && screenHtml().includes('改报其他职位'));
   click('exam-fail-repick');
   check('V18-05c 改报回职位屏', screenHtml().includes('选职位'));
   // 面试落榜：省考吉林普通岗，专业 30 够笔试 25，表达 20 不够面试 22。
+  // minRng 钉死：笔试 30+0=30（超线 5 分自动进 1:3），面试 20+0=20 未过。
   toT5Exam();
   ctx('G.state.attrs.skill = 30;');
   click('exam-type', 'provincial');
   click('exam-province', 'jilin');
   click('exam-position', 'normal');
   click('exam-confirm');
+  ctx('G.rng = (' + minRng.toString() + ')()');
   click('exam-written');
   check('V18-06a 笔试通过进面试屏', screenHtml().includes('面试') && screenHtml().includes('笔试过了'));
   click('exam-interview');
@@ -245,13 +248,18 @@ function toT5Exam() {
   click('exam-fail-retype');
   check('V18-06c 换类型回考试选择屏', screenHtml().includes('先选考试'));
   // 全程通过：省考吉林基层，专业 20 / 表达 20 刚好够（20/20）。
+  // maxRng 钉死：笔试 20+10=30（超线 10 分自动进 1:3），面试 20+10=30
+  // 过线，体检/考察/公示 90% 档 maxRng 必过 → 考上屏。
   toT5Exam();
   click('exam-type', 'provincial');
   click('exam-province', 'jilin');
   click('exam-position', 'grassroots');
   click('exam-confirm');
+  ctx('G.rng = (' + maxRng.toString() + ')()');
   click('exam-written');
   click('exam-interview');
+  check('V18-07a2 面试过后进体检/考察/公示屏', screenHtml().includes('体检') && screenHtml().includes('考察') && screenHtml().includes('公示'));
+  click('exam-checkup');
   check('V18-07a 笔试面试都过：考上屏', screenHtml().includes('考上了'));
   click('exam-hire');
   check('V18-07b 入职定 sector=public：B 卡签了，jobProfile 体制内', !!ctx('G.state.commitments.B') && ctx('G.state.flags.jobProfile').sector === 'public' && ctx('G.state.flags.jobProfile').employerType === 'stable' && ctx('G.state.flags.employment') === 'employed' && ctx('G.state.commitments.B').text.includes('体制内'));
@@ -269,10 +277,10 @@ function toT5Exam() {
   // 笔试与转专业共用同一学业数值（attrs.skill）。
   eraState({ birthYear: 1995, examYear: 2013, turn: 2 });
   ctx(`G.state.major = { name: '土木', source: 'self', tier: '一本' }; G.state.flags.adjusted = true; G.state.flags.adjustedFrom = '计算机'; G.state.ap = 3; G.state.attrs.skill = 25;`);
-  check('V18-10 笔试与转专业共用 attrs.skill：skill 25 时转专业不够门槛、国考普通岗笔试门槛 35 也够不着',
+  check('V18-10 笔试与转专业共用 attrs.skill：skill 25 时转专业不够门槛、国考普通岗笔试门槛 30 也够不着',
     ctx('transferMajorEligible(G.state)') === false
-    && ctx(`civilExamThresholds({ type: 'national', provinceId: null, positionId: 'normal' }).written`) === 35
-    && ctx('G.state.attrs.skill') < 35);
+    && ctx(`civilExamThresholds({ type: 'national', provinceId: null, positionId: 'normal' }).written`) === 30
+    && ctx('G.state.attrs.skill') < 30);
   ctx('G.state.attrs.skill = 30;');
   check('V18-10b skill 30 时转专业够门槛', ctx('transferMajorEligible(G.state)') === true);
 }
@@ -284,35 +292,36 @@ function toT5Exam() {
   eraState({ turn: 2 });
   ctx('G.state.flags.majorK = 1.3;');
   check('V18-11b 天赋乘数 = 专业系数 k（1.3）；无 k 时默认 1', ctx('certTalentK(G.state)') === 1.3 && ctx('certTalentK({ flags: {} })') === 1);
-  // 10000 小时必过：注会差 500 时 1 AP（k=1）补满 10000。
+  // 2000 小时必过：注会差 500 时 1 AP（k=1）补满 2000（§9.1 校准后）。
   eraState({ turn: 2 });
-  ctx(`G.state.flags.majorK = 1; G.state.ap = 3; G.state.flags.certHours = { cpa: 9500 }; G.state.attrs.skill = 20; G.state.attrs.money = 40;`);
-  check('V18-12 10000 有效小时必过注会：考过 + 专业 +10、钱 +5 万', ctx(`certStudy(G.state, 'cpa')`) === true && ctx('certPassed(G.state, "cpa")') === true && ctx('G.state.attrs.skill') === 30 && ctx('G.state.attrs.money') === 45 && ctx('G.state.ap') === 2);
+  ctx(`G.state.flags.majorK = 1; G.state.ap = 3; G.state.flags.certHours = { cpa: 1500 }; G.state.attrs.skill = 20; G.state.attrs.money = 40;`);
+  check('V18-12 2000 有效小时必过注会：考过 + 专业 +10、钱 +5 万', ctx(`certStudy(G.state, 'cpa')`) === true && ctx('certPassed(G.state, "cpa")') === true && ctx('G.state.attrs.skill') === 30 && ctx('G.state.attrs.money') === 45 && ctx('G.state.ap') === 2);
   check('V18-12b 已考过不能再考', ctx(`certStudy(G.state, 'cpa')`) === false && ctx('G.state.ap') === 2);
   // 天赋乘数起作用：k=1.3 时 1 AP 过四级；k=0.8 时 1 AP 不够、2 AP 才够。
   eraState({ turn: 2 });
   ctx(`G.state.flags.majorK = 1.3; G.state.ap = 3; G.state.attrs.express = 20;`);
-  check('V18-13a k=1.3：1 AP 四级 650 有效小时 ≥500，通过，表达 +5', ctx(`certStudy(G.state, 'cet4')`) === true && ctx('certPassed(G.state, "cet4")') === true && ctx('G.state.attrs.express') === 25);
+  check('V18-13a k=1.3：1 AP 四级 650 有效小时 ≥250，通过，表达 +5', ctx(`certStudy(G.state, 'cet4')`) === true && ctx('certPassed(G.state, "cet4")') === true && ctx('G.state.attrs.express') === 25);
   eraState({ turn: 2 });
-  ctx(`G.state.flags.majorK = 0.8; G.state.ap = 3; G.state.attrs.express = 20;`);
-  check('V18-13b k=0.8：1 AP 四级 400 小时不够，2 AP 800 小时才通过', ctx(`certStudy(G.state, 'cet4')`) === true && ctx('certPassed(G.state, "cet4")') === false && ctx(`certStudy(G.state, 'cet4')`) === true && ctx('certPassed(G.state, "cet4")') === true && ctx('G.state.attrs.express') === 25);
-  // 难度档区分：1 AP（k=1）只够四级，不够六级与注会。
+  ctx(`G.state.flags.majorK = 0.8; G.state.ap = 3; G.state.attrs.express = 20; G.state.flags.certs = ['cet4'];`);
+  check('V18-13b k=0.8：1 AP 六级 400 小时不够（500），2 AP 800 小时才通过', ctx(`certStudy(G.state, 'cet6')`) === true && ctx('certPassed(G.state, "cet6")') === false && ctx(`certStudy(G.state, 'cet6')`) === true && ctx('certPassed(G.state, "cet6")') === true && ctx('G.state.attrs.express') === 25);
+  // 难度档区分：1 AP（k=1）够四级（250）与六级（500），不够注会（2000）。
   eraState({ turn: 2 });
   ctx(`G.state.flags.majorK = 1; G.state.ap = 3;`);
   ctx(`certStudy(G.state, 'cet4'); certStudy(G.state, 'cet6'); certStudy(G.state, 'cpa');`);
-  check('V18-14 难度档区分：1 AP 过四级（500）、不过六级（1000）与注会（10000）',
-    ctx('certPassed(G.state, "cet4")') === true && ctx('certPassed(G.state, "cet6")') === false && ctx('certHours(G.state, "cet6")') === 500 && ctx('certPassed(G.state, "cpa")') === false && ctx('certHours(G.state, "cpa")') === 500);
-  // 考过加成：教资 +5 专业。
-  eraState({ turn: 2 });
-  ctx(`G.state.flags.majorK = 1; G.state.ap = 3; G.state.flags.certHours = { teacher: 1000 }; G.state.attrs.skill = 20;`);
-  check('V18-15 教资 1500 小时考过：专业 +5', ctx(`certStudy(G.state, 'teacher')`) === true && ctx('certPassed(G.state, "teacher")') === true && ctx('G.state.attrs.skill') === 25);
+  check('V18-14 难度档区分：1 AP 过四级（250）与六级（500）、不过注会（2000）',
+    ctx('certPassed(G.state, "cet4")') === true && ctx('certPassed(G.state, "cet6")') === true && ctx('certHours(G.state, "cet6")') === 500 && ctx('certPassed(G.state, "cpa")') === false && ctx('certHours(G.state, "cpa")') === 500);
+  // 考过加成：教资 +5 专业（T3 起可报，在校三年级以上）。
+  eraState({ turn: 3 });
+  ctx(`G.state.flags.majorK = 1; G.state.ap = 3; G.state.flags.certHours = { teacher: 250 }; G.state.attrs.skill = 20;`);
+  check('V18-15 教资 750 小时考过：专业 +5', ctx(`certStudy(G.state, 'teacher')`) === true && ctx('certPassed(G.state, "teacher")') === true && ctx('G.state.attrs.skill') === 25);
   // 回归：考证除 AP 外不碰其他属性；年屏/在职年屏都有入口。
-  eraState({ turn: 2 });
+  eraState({ turn: 3 });
   ctx(`G.state.flags.majorK = 1; G.state.ap = 3; G.state.attrs.money = 40; G.state.attrs.stress = 20;`);
-  ctx(`certStudy(G.state, 'cet6');`);
-  check('V18-16a 回归：1 AP 考六级未过，只扣 AP，钱与压力不动', ctx('G.state.ap') === 2 && ctx('G.state.attrs.money') === 40 && ctx('G.state.attrs.stress') === 20);
+  ctx(`certStudy(G.state, 'teacher');`);
+  check('V18-16a 回归：1 AP 考教资未过（500<750），只扣 AP，钱与压力不动', ctx('G.state.ap') === 2 && ctx('G.state.attrs.money') === 40 && ctx('G.state.attrs.stress') === 20);
+  eraState({ turn: 2 });
   ctx('startYear(2)');
-  check('V18-16b 年屏有考证卡：六证 + 天赋行', screenHtml().includes('考证') && screenHtml().includes('大学英语四级') && screenHtml().includes('注册会计师') && screenHtml().includes('天赋乘数'));
+  check('V18-16b 年屏有考证卡：七证 + 天赋行', screenHtml().includes('考证') && screenHtml().includes('大学英语四级') && screenHtml().includes('注册会计师') && screenHtml().includes('天赋乘数'));
   eraState({ turn: 7 });
   ctx('startYear(7)');
   check('V18-16c 在职年屏（T7）也能考证', screenHtml().includes('考证'));
@@ -361,9 +370,11 @@ function toT5Exam() {
   ctx('enterSlice(false)');
   check('V18-22 体制内进 T9 切片：不封 H2，危机之夜，第一件事是找老前辈',
     ctx('G.state.flags.h2') === null && ctx('G.state.turn') === 9 && screenHtml().includes('危机之夜') && !screenHtml().includes('裁员之夜') && screenHtml().includes('老前辈') && !screenHtml().includes('劳动合同法') && !screenHtml().includes('裁员'));
-  check('V18-23 public 三件事：call-senior / review-response / borrow-home，第二件不是 hr-talk',
-    ctx(`sliceDecisions(G.state).map((d) => d.id).join(',')`) === 'call-senior,review-response,borrow-home'
-    && ctx(`sliceDecisions(G.state)[1].body.indexOf('劳动合同法')`) === -1);
+  check('V18-23 public 三件事：call-senior / review-response / transfer-home（借调外地，不再沿用大厂 borrow-home 的空窗期文案）',
+    ctx(`sliceDecisions(G.state).map((d) => d.id).join(',')`) === 'call-senior,review-response,transfer-home'
+    && ctx(`sliceDecisions(G.state)[1].body.indexOf('劳动合同法')`) === -1
+    && ctx(`sliceDecisions(G.state)[2].body.indexOf('空窗期')`) === -1
+    && ctx(`sliceDecisions(G.state)[2].title`).includes('借调'));
   // 结局屏。
   pubState();
   ctx('sliceEnd()');

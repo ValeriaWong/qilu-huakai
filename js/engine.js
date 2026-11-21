@@ -919,6 +919,39 @@ function resolveAdmission(state, intendedMajor, stanceK) {
   return { major: intendedMajor, tier: '本科', k: stanceK, adjusted: false, note: '' };
 }
 
+// v1.4.3：渐进式延迟退休（全国人大常委会 2024-09-13 决定，2025-01-01
+// 起实施，15 年过渡期 2025–2039）。pure：只读 RETIREMENT_CATEGORIES。
+// m = 从 2025-01 到“到原法定年龄的那个月”的月数（只知道出生年份，
+// 按 1 月计）；m < 0（原法定年龄在 2025-01 之前）不延迟；
+// delay = min(maxDelay, floor(m / step) + 1)。返回 { years, months }。
+// 验算：1965 男 → 60 岁 1 个月；1970 男 → 61 岁 4 个月；
+// 1975 女工人 → 50 岁 1 个月；1980 女工人 → 52 岁 7 个月。
+function retirementAgeFor(birthYear, categoryId) {
+  const cats = (typeof RETIREMENT_CATEGORIES !== 'undefined') ? RETIREMENT_CATEGORIES : [];
+  const cat = cats.find((c) => c.id === categoryId) || cats[0];
+  if (!cat) return { years: 60, months: 0 };
+  const baseMonth = (birthYear + cat.baseYears) * 12;
+  const startMonth = 2025 * 12; // 2025-01
+  const m = baseMonth - startMonth;
+  if (m < 0) return { years: cat.baseYears, months: 0 };
+  const delay = Math.min(cat.maxDelayMonths, Math.floor(m / cat.step) + 1);
+  const total = cat.baseYears * 12 + delay;
+  return { years: Math.floor(total / 12), months: total % 12 };
+}
+function retirementYearFor(birthYear, categoryId) {
+  return birthYear + retirementAgeFor(birthYear, categoryId).years;
+}
+
+// v1.4.3：不消耗主 rng 的确定性掷骰（人际事件、隐藏剧情线索用）。
+// 主 rng 的流不能被这些每年一次的掷骰打乱（否则 era/omen 种子统计会
+// 变）。seed + turn + salt 经 FNV-1a 哈希 → [0, 1)。pure。
+function hashRoll(seed, turn, salt) {
+  const str = String(seed) + '|' + String(turn) + '|' + String(salt || '');
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = (h * 16777619) >>> 0; }
+  return (h % 1000) / 1000;
+}
+
 const REWARD_NAMES = { money: '钱', skill: '专业', express: '表达', network: '人脉', influence: '影响力', health: '健康' };
 function rewardText(reward) {
   return Object.entries(reward || {})
@@ -1196,5 +1229,5 @@ function kindnessSource(state, meta) {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { SAVE_KEY, META_KEY, blankAttrs, newRun, saveGame, loadGame, clearSave, saveKeyForSlot, exportCode, importCode, loadMeta, saveMeta, pressureTier, settleYear, sealDie, omenTrueClaim, omenMisleadingClaim, omenClaimsFor, offerTier, layoffChance, gambleChance, gambleChanceFrom, tierLabel, h5Level, fResilience, careSubjectFor, sealedCareSubject, estrangementScope, migrateSave, severancePay, obsessionScore, counterfactualFlips, postFailureMitigation, classifyVenture, nonVentureReason, startVenture, ventureChance, ventureThemes, resolveVentureYear, rewardText, majorAdmissionLine, bestReachableMajor, resolveAdmission, npcReply, npcIntentOf, interviewEnFeedback, sanctuaryReply, kindnessSource, npcTrustOf, DRILL_TOPICS };
+  module.exports = { SAVE_KEY, META_KEY, blankAttrs, newRun, saveGame, loadGame, clearSave, saveKeyForSlot, exportCode, importCode, loadMeta, saveMeta, pressureTier, settleYear, sealDie, omenTrueClaim, omenMisleadingClaim, omenClaimsFor, offerTier, layoffChance, gambleChance, gambleChanceFrom, tierLabel, h5Level, fResilience, careSubjectFor, sealedCareSubject, estrangementScope, migrateSave, severancePay, obsessionScore, counterfactualFlips, postFailureMitigation, classifyVenture, nonVentureReason, startVenture, ventureChance, ventureThemes, resolveVentureYear, rewardText, majorAdmissionLine, bestReachableMajor, resolveAdmission, retirementAgeFor, retirementYearFor, hashRoll, npcReply, npcIntentOf, interviewEnFeedback, sanctuaryReply, kindnessSource, npcTrustOf, DRILL_TOPICS };
 }

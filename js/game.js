@@ -82,7 +82,7 @@ function screenTitle() {
     <div class="actions small">
       <button data-act="export">导出存档码</button>
       <button data-act="import">导入存档码</button>
-      <button data-act="reset">重开（清除当前周目位存档）</button>
+      <button data-act="reset">${G.resetArmed ? '再点一次确认清除' : '重开（清除当前周目位存档）'}</button>
     </div>`);
   G.pickedObsessions = new Set();
   G.pickedDifficulty = 'normal';
@@ -153,6 +153,7 @@ function rollH0Access(rng, familyKey) {
 }
 
 function startNew(mode) {
+  G.resetArmed = false; // v1.4.3：开始新局清掉重开武装
   // v1.2 (P0-2): 开局必须恰好选 2 条执念，0/1 条时开始按钮阻止进入
   // 并明示要求，系统绝不暗中补选。切片模式是演示捷径，本来就没有
   // 执念，不受这条限制。
@@ -427,9 +428,12 @@ function screenTransition() {
 // v0.5: region picker, shown once when the run has no Gaokao record.
 // The score is rolled here, region-relative (line1 −20 to line1 +220),
 // so the distribution stays meaningful in every region.
-// v0.6: era runs (flags.era set in S0.5) pick region + track against the
-// verified line table instead; legacy runs (no era, incl. old saves) keep
-// the 2026 picker below.
+// v1.4.3（§9.15）：山东特殊类型批 2026 年起取消——线值 525 保留
+// 只作历史参考，不再当作在招批次展示。其他三省照常。
+function specialLineText(region) {
+  if (region && region.specialCancelled) return '特殊类型批已取消（2026 年起）';
+  return '特殊类型线 ' + (region ? region.specialLine : '');
+}
 function screenT1Region() {
   const s = G.state;
   const era = s.flags.era;
@@ -438,7 +442,7 @@ function screenT1Region() {
     setScreen(`
     <h1>T1 · 18 岁 · 高考志愿填报</h1>
     <p class="intro">先定一件事：你在哪里参加高考？分数和分数线都按这个省的现行政策走。</p>
-    <div class="options">${regions.map((r) => `<button class="opt" data-act="t1-region-pick" data-id="${r.id}"><b>${r.name} ${r.year}</b><span>${r.model}${r.track ? ' · ' + r.track + '线' : ''} · 总分 ${r.total} · 一段线/本科线 ${r.line1} · 特殊类型线 ${r.specialLine} · ${r.batchName}最多 ${r.batchChoices} 个${r.batchUnit}</span></button>`).join('')}</div>
+    <div class="options">${regions.map((r) => `<button class="opt" data-act="t1-region-pick" data-id="${r.id}"><b>${r.name} ${r.year}</b><span>${r.model}${r.track ? ' · ' + r.track + '线' : ''} · 总分 ${r.total} · 一段线/本科线 ${r.line1} · ${specialLineText(r)} · ${r.batchName}最多 ${r.batchChoices} 个${r.batchUnit}</span></button>`).join('')}</div>
     <p class="muted">先做山东、辽宁、吉林、黑龙江四个省，其他省以后加。选定后不能改，分数当场掷出并封存。</p>`);
     return;
   }
@@ -550,9 +554,12 @@ function screenT1() {
   const era = g.era || null;
   const eraTiers = era ? admissionTiers(g.row || {}) : [];
   const eraHit = era ? (eraTiers.find((t) => eff >= t.line) || null) : null;
+  const specialGone = !era && (GAOKAO_REGIONS[g.region] || {}).specialCancelled;
   const scoreLine = era
     ? (eraHit ? `你的分数落在「${eraHit.name}」档。` : '你的分数没够上任何一条线。')
-    : (eff >= g.specialLine ? '已过特殊类型线。' : eff >= g.line1 ? '已过一段线，未过特殊类型线。' : '未过一段线。');
+    : specialGone
+      ? (eff >= g.line1 ? '已过一段线。' : '未过一段线。')
+      : (eff >= g.specialLine ? '已过特殊类型线。' : eff >= g.line1 ? '已过一段线，未过特殊类型线。' : '未过一段线。');
   const eraTierText = era
     ? (eraTiers.map((t) => `${t.name}线 ${t.line}（k = ${t.k}）`).join(' · ') || '本年无本科线。')
     : '';
@@ -563,7 +570,7 @@ function screenT1() {
       <p><b>高考总分：${eff}</b>（封存分，选地区时掷出，不可更改）· ${era ? `${region.name} ${era.examYear} 年高考 · ${EXAM_MODE_LABEL[era.mode]} · ${era.track}类` : `${region.name} ${region.year} · ${region.model}${region.track ? ' · ' + region.track + '线' : ''} · 总分 ${region.total}`}</p>
       ${era
         ? `<p>${eraTierText} ${scoreLine}</p><p class="muted">档位线是真实历史控制线（${era.examYear} 年，已核实）。专业系数 k 由档位定。</p>`
-        : `<p>一段线 ${region.line1} · 特殊类型线 ${region.specialLine} · 二段线 ${region.line2} · ${region.batchName}每次最多 ${region.batchChoices} 个${region.batchUnit}。${scoreLine}</p>
+        : `<p>一段线 ${region.line1} · ${specialLineText(region)} · 二段线 ${region.line2} · ${region.batchName}每次最多 ${region.batchChoices} 个${region.batchUnit}。${scoreLine}</p>
       <p class="muted">${esc(region.note)}</p>`}
       ${(g.bonus || 0) > 0 ? `<p class="warn">旧存档的广告加分（+${g.bonus}）已按新规则失效，分数恢复为封存原始分 ${g.base}。</p>` : ''}
       ${G.t1Diagnosing
@@ -666,7 +673,7 @@ function t1DiagnosisHtml() {
   const inp = (typeof document !== 'undefined') ? document.querySelector('#t1-major') : null;
   const name = ((inp && inp.value) || G.t1MajorDraft || '').trim();
   const lines = [`<p><b>志愿诊断</b>（只给信息，不改分数）</p>`,
-    `<p>你的封存分数 ${eff}，一段线 ${line1}，特殊类型线 ${g.specialLine}。诊断不改分数，也不限次数。</p>`];
+    `<p>你的封存分数 ${eff}，一段线 ${line1}，${specialLineText(GAOKAO_REGIONS[g.region])}。诊断不改分数，也不限次数。</p>`];
   if (name) {
     const line = majorAdmissionLine(name, line1);
     lines.push(`<p>「${esc(name)}」参考线 ${line}：` + (eff >= line ? '达线。' : `差 ${line - eff} 分。`) + '</p>');
@@ -843,10 +850,14 @@ function transferMajorEligible(s) {
   return !!(s.flags.adjusted && s.turn >= 2 && s.turn <= 4 && (s.attrs.skill || 0) >= TRANSFER_MAJOR_MIN_SKILL);
 }
 function transferMajorHtml(s) {
-  if (!s.flags.adjusted || s.turn < 2 || s.turn > 4) return '';
-  const tried = s.flags.transferYear === s.turn;
+  // v1.4.3：成功后卡片不再消失——成功文案（transferLast）当年仍显示，
+  // 只是不再给按钮；失败仍可再试（adjusted 还在），按钮照常。
   const last = s.flags.transferLast;
   const result = last && last.turn === s.turn ? `<p>${esc(last.text)}</p>` : '';
+  if (!s.flags.adjusted || s.turn < 2 || s.turn > 4) {
+    return result ? `<div class="card"><h2>转专业</h2>${result}</div>` : '';
+  }
+  const tried = s.flags.transferYear === s.turn;
   const skill = s.attrs.skill || 0;
   const gated = skill < TRANSFER_MAJOR_MIN_SKILL;
   return `<div class="card"><h2>转专业</h2>${result}<button class="opt" data-act="transfer-major" ${s.ap < 1 || tried || gated ? 'disabled' : ''}><b>转回${esc(s.flags.adjustedFrom || '想读的专业')}</b><span>1 AP，50% 成功。今年一次机会，成功后读回你想读的专业；失败压力 +10。${tried ? '（今年已试过）' : ''}${gated ? `（须专业 ≥ ${TRANSFER_MAJOR_MIN_SKILL} 才可申请，你现在 ${skill}：多做系统学习攒专业。）` : ''}</span></button></div>`;
@@ -883,20 +894,103 @@ function certHours(s, id) { return ((s.flags && s.flags.certHours) || {})[id] ||
 function certPassed(s, id) { return ((s.flags && s.flags.certs) || []).indexOf(id) >= 0; }
 // 有效小时 = 投入小时 × 天赋乘数（Allen 模型，见 data.js CERTS 注释）。
 function certEffectiveHours(rawHours, k) { return Math.round(rawHours * (k || 1)); }
+// 证书查找：id 可以是证书 id（单阶段）或阶段 id（法考/执业医师）。
+// 返回 { cert, stage }，stage 为 null 时是单阶段证书。
+function certFind(id) {
+  for (const c of CERTS) {
+    if (c.id === id) return { cert: c, stage: null };
+    if (c.stages) {
+      const st = c.stages.find((x) => x.id === id);
+      if (st) return { cert: c, stage: st };
+    }
+  }
+  return { cert: null, stage: null };
+}
+function certStageOf(cert, stageId) { return (cert.stages || []).find((x) => x.id === stageId) || null; }
+// 报考门槛（v1.4.3，§9.4）：专业硬限制（法考须法学、执业医师须
+// 临床医学）、年级门槛（教资 T3 起、在校三年级以上；执业医师 T7 起，
+// 见习满 1 年）、前置证书（六级须先过四级）、阶段顺序（主观题须先
+// 过客观题）。返回 { ok, reason }。
+function certGate(s, id) {
+  const found = certFind(id);
+  if (!found.cert) return { ok: false, reason: '没有这个证书。' };
+  const c = found.cert;
+  if (c.requiresMajor && (!s.major || s.major.name !== c.requiresMajor)) {
+    return { ok: false, reason: '须' + c.requiresMajor + '专业才能报考。' };
+  }
+  if (c.requires && c.requires.minTurn && s.turn < c.requires.minTurn) {
+    return { ok: false, reason: c.id === 'teacher' ? '在校三年级以上才可报考（T3 起）。' : '要到 T' + c.requires.minTurn + '（' + (17 + c.requires.minTurn) + ' 岁）才可报考。' };
+  }
+  if (c.requires && c.requires.cert && !certPassed(s, c.requires.cert)) {
+    const pre = CERTS.find((x) => x.id === c.requires.cert);
+    return { ok: false, reason: '须先考过' + (pre ? pre.name : c.requires.cert) + '。' };
+  }
+  if (found.stage && found.stage.requires && !certPassed(s, found.stage.requires)) {
+    const pre = certStageOf(c, found.stage.requires);
+    return { ok: false, reason: '须先通过' + (pre ? pre.name : found.stage.requires) + '。' };
+  }
+  return { ok: true, reason: '' };
+}
+// 阶段成绩过期（v1.4.3，§9.5）：法考客观题本年度及下一考试年度
+// 有效、执业医师技能 2 年有效（按“当年+次年”理解）。过期即清零，
+// enterYear 每年开头跑 expireCertStages；这里是惰性判定（卡片与
+// 报考都以它为准，过期成绩不算通过）。
+function certStageExpired(s, stage) {
+  if (!stage || !stage.validityTurns) return false;
+  const passedTurn = ((s.flags && s.flags.certStageTurn) || {})[stage.id];
+  if (typeof passedTurn !== 'number') return false;
+  return s.turn > passedTurn + stage.validityTurns;
+}
+function certStageLive(s, stageId) {
+  if (!certPassed(s, stageId)) return false;
+  const found = certFind(stageId);
+  return found.stage ? !certStageExpired(s, found.stage) : true;
+}
+function expireCertStages(s) {
+  // 每年开头：过期的阶段成绩清零（须重考），留一条记录给考证卡显示。
+  for (const c of CERTS) {
+    for (const st of (c.stages || [])) {
+      if (!st.validityTurns) continue;
+      if (certPassed(s, st.id) && certStageExpired(s, st)) {
+        s.flags.certs = (s.flags.certs || []).filter((x) => x !== st.id);
+        s.flags.certHours = s.flags.certHours || {};
+        s.flags.certHours[st.id] = 0;
+        s.flags.certExpired = { turn: s.turn, id: st.id, text: c.name + '的' + st.name + '成绩已过期（只在当年及下一年有效），须重考。' };
+      }
+    }
+  }
+}
 function certStudy(s, id) {
   if (!s || s.ap < 1) return false;
-  const c = CERTS.find((x) => x.id === id);
-  if (!c || certPassed(s, id)) return false;
+  const found = certFind(id);
+  if (!found.cert || certPassed(s, id)) return false;
+  const gate = certGate(s, id);
+  if (!gate.ok) return false;
+  const c = found.cert;
+  const difficulty = found.stage ? found.stage.difficulty : c.difficulty;
   s.ap -= 1;
   s.flags.certHours = s.flags.certHours || {};
   s.flags.certHours[id] = certHours(s, id) + certEffectiveHours(CERT_HOURS_PER_AP, certTalentK(s));
   s.yearActions = s.yearActions || [];
-  s.yearActions.push('考证学习：' + c.name);
-  if (s.flags.certHours[id] >= c.difficulty) {
+  s.yearActions.push('考证学习：' + (found.stage ? c.name + '·' + found.stage.name : c.name));
+  if (s.flags.certHours[id] >= difficulty) {
     s.flags.certs = s.flags.certs || [];
+    // v1.4.3 修正：先记 wasPassed 再推入 id——单阶段证的 id 就是证本
+    // 身，先推再判 !certPassed 会让加成永远发不出来。
+    const wasPassed = certPassed(s, c.id);
     s.flags.certs.push(id);
-    for (const [k, v] of Object.entries(c.bonus)) s.attrs[k] = (s.attrs[k] || 0) + v;
-    s.flags.certLast = { turn: s.turn, id, text: '考过了' + c.name + '：' + c.bonusText + '。' };
+    if (found.stage) {
+      s.flags.certStageTurn = s.flags.certStageTurn || {};
+      s.flags.certStageTurn[id] = s.turn;
+    }
+    const allStagesDone = !c.stages || c.stages.every((st) => certPassed(s, st.id));
+    if (allStagesDone && !wasPassed) {
+      if (c.id !== id) s.flags.certs.push(c.id);
+      for (const [k, v] of Object.entries(c.bonus)) s.attrs[k] = (s.attrs[k] || 0) + v;
+      s.flags.certLast = { turn: s.turn, id: c.id, text: '考过了' + c.name + '：' + c.bonusText + '。' };
+    } else if (found.stage) {
+      s.flags.certLast = { turn: s.turn, id: found.stage.id, text: '考过了' + c.name + '·' + found.stage.name + '，下一阶段继续。' };
+    }
   }
   autosave('考证学习');
   return true;
@@ -904,20 +998,43 @@ function certStudy(s, id) {
 function certHtml(s) {
   if (s.turn < 2 || s.turn === 9) return '';
   const last = s.flags.certLast && s.flags.certLast.turn === s.turn ? `<p>${esc(s.flags.certLast.text)}</p>` : '';
+  const expired = s.flags.certExpired && s.flags.certExpired.turn === s.turn ? `<p class="warn">${esc(s.flags.certExpired.text)}</p>` : '';
   const rows = CERTS.map((c) => {
-    const h = certHours(s, c.id);
+    const gate = certGate(s, c.id);
     const done = certPassed(s, c.id);
-    return `<button class="opt" data-act="cert-study" data-id="${c.id}" ${s.ap < 1 || done ? 'disabled' : ''}><b>${esc(c.name)}</b><span>${done ? '已考过：' + c.bonusText : '已投入 ' + h + ' / ' + c.difficulty + ' 有效小时（1 AP = ' + CERT_HOURS_PER_AP + ' 小时 × 天赋 ' + certTalentK(s) + '）。考过：' + c.bonusText}</span></button>`;
+    const head = `<b>${esc(c.name)}</b><span class="muted">${esc(c.desc || '')}</span>`;
+    if (!c.stages) {
+      const h = certHours(s, c.id);
+      const g = gate.ok ? '' : `（${esc(gate.reason)}）`;
+      return `<button class="opt" data-act="cert-study" data-id="${c.id}" ${s.ap < 1 || done || !gate.ok ? 'disabled' : ''}>${head}<span>${done ? '已考过：' + c.bonusText : '已投入 ' + h + ' / ' + c.difficulty + ' 有效小时（1 AP = ' + CERT_HOURS_PER_AP + ' 小时 × 天赋 ' + certTalentK(s) + '）。考过：' + c.bonusText}${g}</span></button>`;
+    }
+    const stageRows = c.stages.map((st) => {
+      const sg = certGate(s, st.id);
+      const sd = certPassed(s, st.id);
+      const live = sd && !certStageExpired(s, st);
+      const h = certHours(s, st.id);
+      const g = sg.ok ? '' : `（${esc(sg.reason)}）`;
+      const stText = live ? '已通过' + (st.validityTurns ? '（当年及下一年有效）' : '') : (sd ? '已过期，须重考' : '已投入 ' + h + ' / ' + st.difficulty + ' 有效小时');
+      return `<button class="opt" data-act="cert-study" data-id="${st.id}" ${s.ap < 1 || live || !sg.ok ? 'disabled' : ''}><b>${esc(c.name)} · ${esc(st.name)}</b><span>${stText}${g}</span></button>`;
+    }).join('');
+    return `<div class="card"><h3>${head}</h3><p class="muted">${done ? '已考过：' + c.bonusText : '分两阶段考，全部通过才发证：' + c.bonusText}</p><div class="options">${stageRows}</div></div>`;
   }).join('');
-  return `<div class="card"><h2>考证</h2>${last}<p class="muted">天赋乘数 ${certTalentK(s)}（= 专业系数 k，开局封存）。有效小时 = 投入小时 × 天赋；最难的证要 10000 有效小时。</p><div class="options">${rows}</div></div>`;
+  return `<div class="card"><h2>考证</h2>${last}${expired}<p class="muted">天赋乘数 ${certTalentK(s)}（= 专业系数 k，开局封存）。有效小时 = 投入小时 × 天赋；最难的证（注会）要 2000 有效小时，10000 有效小时必过任何考试。</p><div class="options">${rows}</div></div>`;
 }
 
 // ---- 体制内入职考试（补充 A） ----
 // pickT5('stable') 不再直接进选行业屏，改走考试流程：选国考 / 省考
-// → 选省份（省考）→ 选职位 → 报名 → 笔试 → 面试 → 通过入职
-// （signT5，sector='public'）。不花 AP（T5 本身没有 AP 经济）；
-// 成本是准备本身——笔试看专业、面试看表达，低于阈值一定落榜。
-// 落榜可改报其他职位、换考试类型，或放弃考公回 T5 选别的工作。
+// → 选省份（省考）→ 选职位 → 报名 → 笔试 → 面试 → 体检/考察/
+// 公示 → 通过入职（signT5，sector='public'）。不花 AP（T5 本身
+// 没有 AP 经济）；成本是准备本身。
+// v1.4.3（§9.7–9.12 校准）：确定性阈值改成排名制——笔试分 =
+// 专业 + 0–10 浮动，过线只拿到进面资格；1:3 排名进面（分差 ≥5
+// 稳进，分差 <5 时国考 50% / 省考 70% 进——GAME_BALANCE，国考
+// 更卷）；面试分 = 表达 + 0–10 浮动，过线后算综合成绩（真实权重：
+// 国考 5:5、山东 4:6、吉林 6:4、辽宁 5:5、黑龙江 5:5，展示在考上
+// 屏）；进面≠录用：面试后还有体检、考察、公示（90% 通过，
+// GAME_BALANCE）与 1 年试用期。落榜可改报其他职位、换考试类型，
+// 或放弃考公回 T5 选别的工作。
 function civilExamThresholds(d) {
   const pos = CIVIL_EXAM.positions.find((x) => x.id === d.positionId) || CIVIL_EXAM.positions[2];
   const type = CIVIL_EXAM.types.find((x) => x.id === d.type) || CIVIL_EXAM.types[1];
@@ -926,6 +1043,25 @@ function civilExamThresholds(d) {
     written: pos.writtenMin + type.writtenMod + (prov ? prov.writtenMod : 0),
     interview: pos.interviewMin,
   };
+}
+function civilExamWeights(d) {
+  if (d.type === 'national') return CIVIL_EXAM.weights.national;
+  return CIVIL_EXAM.weights[d.provinceId] || CIVIL_EXAM.weights.liaoning;
+}
+function civilExamComposite(d, writtenScore, interviewScore) {
+  const w = civilExamWeights(d);
+  return Math.round((writtenScore * w[0] + interviewScore * w[1]) / (w[0] + w[1]) * 10) / 10;
+}
+function civilExamWeightsText(d) {
+  const w = civilExamWeights(d);
+  return w[0] + ':' + w[1];
+}
+function examAgeLabel() {
+  const t = (G.examDraft && G.examDraft.examTurn) || 5;
+  return 'T' + t + ' · ' + (17 + t) + ' 岁';
+}
+function majorCatOf(s) {
+  return (s.major && MAJOR_CATS[s.major.name]) || null;
 }
 function civilExamTypeName(d) {
   const t = CIVIL_EXAM.types.find((x) => x.id === d.type);
@@ -942,8 +1078,8 @@ function civilExamPositionName(d) {
 function screenCivilExamType() {
   const s = G.state;
   setScreen(`
-    <h1>T5 · 22 岁 · 考公：先选考试</h1>
-    <p class="intro">进体制内要先考试：笔试看专业，面试看表达。落榜可以改报、可以换考试，也可以放弃回头选别的工作。</p>
+    <h1>${examAgeLabel()} · 考公：先选考试</h1>
+    <p class="intro">进体制内要先考试：笔试（行测+申论）以综合能力判定——游戏内以专业数值简化，真实笔试不直接考专业知识；面试看表达与综合素质。落榜可以改报、可以换考试，也可以放弃回头选别的工作。</p>
     <div class="options">${CIVIL_EXAM.types.map((t) => `<button class="opt" data-act="exam-type" data-id="${t.id}"><b>${t.name}</b><span>${t.desc}</span></button>`).join('')}</div>
     <p class="muted">你现在的专业 ${s.attrs.skill}、表达 ${s.attrs.express}。职位页会写明每个岗位的门槛。</p>
     <div class="actions"><button data-act="exam-quit">不考了，回 T5 选别的工作</button></div>`);
@@ -951,13 +1087,13 @@ function screenCivilExamType() {
 function pickCivilExamType(id) {
   const t = CIVIL_EXAM.types.find((x) => x.id === id);
   if (!t) return;
-  G.examDraft = { type: t.id, provinceId: null, positionId: null };
+  G.examDraft = { type: t.id, provinceId: null, positionId: null, examTurn: (G.examDraft && G.examDraft.examTurn) || 5 };
   if (t.id === 'provincial') screenCivilExamProvince();
   else screenCivilExamPosition();
 }
 function screenCivilExamProvince() {
   setScreen(`
-    <h1>T5 · 22 岁 · 考公：选省份</h1>
+    <h1>${examAgeLabel()} · 考公：选省份</h1>
     <p class="intro">省考分省招录，各省竞争程度不同，笔试门槛也不一样：山东最卷（+5），吉林 / 黑龙江低一档（−5）。</p>
     <div class="options">${CIVIL_EXAM.provinces.map((p) => `<button class="opt" data-act="exam-province" data-id="${p.id}"><b>${p.name}</b><span>笔试门槛 ${p.writtenMod > 0 ? '+' + p.writtenMod : p.writtenMod}。</span></button>`).join('')}</div>
     <div class="actions"><button data-act="exam-back-type">返回重选考试</button></div>`);
@@ -971,21 +1107,26 @@ function pickCivilExamProvince(id) {
 function screenCivilExamPosition() {
   const s = G.state;
   const d = G.examDraft || { type: 'provincial', provinceId: null, positionId: null };
+  const myCat = majorCatOf(s);
   const rows = CIVIL_EXAM.positions.map((pos) => {
     const th = civilExamThresholds({ type: d.type, provinceId: d.provinceId, positionId: pos.id });
     const okW = (s.attrs.skill || 0) >= th.written;
     const okI = (s.attrs.express || 0) >= th.interview;
-    return `<button class="opt" data-act="exam-position" data-id="${pos.id}"><b>${pos.name}</b><span>${pos.desc}笔试门槛 ${th.written}（你 ${s.attrs.skill}${okW ? '，够' : '，不够'}）· 面试门槛 ${th.interview}（你 ${s.attrs.express}${okI ? '，够' : '，不够'}）。</span></button>`;
+    const catBlocked = pos.cats && pos.cats.indexOf(myCat) < 0;
+    const catText = pos.cats ? `须${pos.cats.map((c) => MAJOR_CAT_NAMES[c]).join('或')}专业${catBlocked ? `（你是${s.major ? s.major.name : '未定专业'}，报不了）` : ''}。` : '';
+    return `<button class="opt" data-act="exam-position" data-id="${pos.id}" ${catBlocked ? 'disabled' : ''}><b>${pos.name}</b><span>${pos.desc}${catText}笔试门槛 ${th.written}（你 ${s.attrs.skill}${okW ? '，够' : '，不够'}）· 面试门槛 ${th.interview}（你 ${s.attrs.express}${okI ? '，够' : '，不够'}）。</span></button>`;
   }).join('');
   setScreen(`
-    <h1>T5 · 22 岁 · 考公：选职位</h1>
-    <p class="intro">你报的是${civilExamTypeName(d)}${d.type === 'provincial' ? ' · ' + civilExamProvinceName(d) : ''}。门槛是准备线，不是运气：低于门槛一定落榜，高于门槛一定通过。</p>
+    <h1>${examAgeLabel()} · 考公：选职位</h1>
+    <p class="intro">你报的是${civilExamTypeName(d)}${d.type === 'provincial' ? ' · ' + civilExamProvinceName(d) : ''}。门槛是准备线：过线才能进 1:3 面试范围（真实招录按笔试成绩排名进面，进面≠录用）；面试后还有体检、考察、公示与 1 年试用期。</p>
     <div class="options">${rows}</div>
     <div class="actions"><button data-act="exam-back">${d.type === 'provincial' ? '返回重选省份' : '返回重选考试'}</button></div>`);
 }
 function pickCivilExamPosition(id) {
   const pos = CIVIL_EXAM.positions.find((x) => x.id === id);
   if (!pos || !G.examDraft) return;
+  const myCat = majorCatOf(G.state);
+  if (pos.cats && pos.cats.indexOf(myCat) < 0) return; // 硬性限岗：专业不对报不了
   G.examDraft.positionId = pos.id;
   screenCivilExamConfirm();
 }
@@ -994,9 +1135,10 @@ function screenCivilExamConfirm() {
   const d = G.examDraft;
   const th = civilExamThresholds(d);
   setScreen(`
-    <h1>T5 · 22 岁 · 考公：报名</h1>
+    <h1>${examAgeLabel()} · 考公：报名</h1>
     <div class="card"><p>你报的是${civilExamTypeName(d)}${d.type === 'provincial' ? ' · ' + civilExamProvinceName(d) : ''} · ${civilExamPositionName(d)}。</p>
-    <p>笔试门槛 ${th.written}，你的专业 ${s.attrs.skill}；面试门槛 ${th.interview}，你的表达 ${s.attrs.express}。${(s.attrs.skill || 0) >= th.written && (s.attrs.express || 0) >= th.interview ? '两项都够，正常发挥就能进。' : '有一项不够，硬考会落榜——可以先回去改报要求低的职位。'}</p></div>
+    <p>笔试门槛 ${th.written}，你的专业 ${s.attrs.skill}；面试门槛 ${th.interview}，你的表达 ${s.attrs.express}。${(s.attrs.skill || 0) >= th.written && (s.attrs.express || 0) >= th.interview ? '两项都够，正常发挥就能进。' : '有一项不够，硬考会落榜——可以先回去改报要求低的职位。'}</p>
+    <p class="muted">流程：资格审查 → 报名确认缴费 → 准考证打印 → 笔试 → 成绩/划线 → 资格复审 → 面试 → 体检 → 考察 → 公示 → 试用期 1 年。过线≠进面：笔试按成绩排进 1:3 面试范围；进面≠录用：面试后还有体检、考察、公示。</p></div>
     <div class="actions"><button class="primary" data-act="exam-confirm">报名，参加笔试</button><button data-act="exam-back-position">返回重选职位</button></div>`);
 }
 function screenCivilExamWritten() {
@@ -1004,38 +1146,63 @@ function screenCivilExamWritten() {
   const d = G.examDraft;
   const th = civilExamThresholds(d);
   setScreen(`
-    <h1>T5 · 22 岁 · 考公：笔试</h1>
-    <div class="card"><p>${civilExamTypeName(d)}${d.type === 'provincial' ? ' · ' + civilExamProvinceName(d) : ''} · ${civilExamPositionName(d)}。笔试门槛 ${th.written}，你的专业 ${s.attrs.skill}。</p></div>
+    <h1>${examAgeLabel()} · 考公：笔试</h1>
+    <div class="card"><p>${civilExamTypeName(d)}${d.type === 'provincial' ? ' · ' + civilExamProvinceName(d) : ''} · ${civilExamPositionName(d)}。笔试门槛 ${th.written}，你的专业 ${s.attrs.skill}。</p>
+    <p class="muted">笔试（行测+申论）以综合能力判定——游戏内以专业数值 + 0–10 浮动简化，真实笔试不直接考专业知识。过线只拿到进面资格，不等于进面。</p></div>
     <div class="actions"><button class="primary" data-act="exam-written">交卷，等笔试成绩</button></div>`);
 }
 function resolveCivilExamWritten() {
   const s = G.state;
   const d = G.examDraft;
   const th = civilExamThresholds(d);
-  if ((s.attrs.skill || 0) >= th.written) screenCivilExamInterview();
-  else screenCivilExamFail('written', th);
+  const score = (s.attrs.skill || 0) + G.rng.int(0, 10);
+  G.examDraft.writtenScore = score;
+  if (score < th.written) { screenCivilExamFail('written', th); return; }
+  const margin = score - th.written;
+  if (margin < 5) {
+    const inRange = G.rng.chance(d.type === 'national' ? 0.5 : 0.7);
+    if (!inRange) { screenCivilExamFail('rank', th); return; }
+  }
+  screenCivilExamInterview();
 }
 function screenCivilExamInterview() {
   const s = G.state;
   const d = G.examDraft;
   const th = civilExamThresholds(d);
   setScreen(`
-    <h1>T5 · 22 岁 · 考公：面试</h1>
-    <div class="card"><p>笔试过了。${civilExamPositionName(d)}的面试门槛 ${th.interview}，你的表达 ${s.attrs.express}。</p></div>
+    <h1>${examAgeLabel()} · 考公：面试</h1>
+    <div class="card"><p>笔试过了：笔试分 ${d.writtenScore}（门槛 ${th.written}），进了 1:3 面试范围。${civilExamPositionName(d)}的面试门槛 ${th.interview}，你的表达 ${s.attrs.express}。</p>
+    <p class="muted">面试测查：综合分析、计划组织、应急应变、人际沟通、言语表达、岗位匹配——游戏内以表达数值 + 0–10 浮动简化。</p></div>
     <div class="actions"><button class="primary" data-act="exam-interview">参加面试</button></div>`);
 }
 function resolveCivilExamInterview() {
   const s = G.state;
   const d = G.examDraft;
   const th = civilExamThresholds(d);
-  if ((s.attrs.express || 0) >= th.interview) screenCivilExamPassed();
-  else screenCivilExamFail('interview', th);
+  const score = (s.attrs.express || 0) + G.rng.int(0, 10);
+  G.examDraft.interviewScore = score;
+  if (score < th.interview) { screenCivilExamFail('interview', th); return; }
+  screenCivilExamCheckup();
+}
+function screenCivilExamCheckup() {
+  const d = G.examDraft;
+  const composite = civilExamComposite(d, d.writtenScore, d.interviewScore);
+  setScreen(`
+    <h1>${examAgeLabel()} · 考公：体检 / 考察 / 公示</h1>
+    <div class="card"><p>面试过了：面试分 ${d.interviewScore}。综合成绩 ${composite}（笔试 ${d.writtenScore} × ${civilExamWeightsText(d).split(':')[0]} + 面试 ${d.interviewScore} × ${civilExamWeightsText(d).split(':')[1]}，权重 ${civilExamWeightsText(d)}）。</p>
+    <p class="muted">进面≠录用：接下来是体检、考察、公示三关，公示无异议才正式录用，之后还有 1 年试用期。游戏内这一关 90% 通过。</p></div>
+    <div class="actions"><button class="primary" data-act="exam-checkup">参加体检与考察</button></div>`);
+}
+function resolveCivilExamCheckup() {
+  if (G.rng.chance(0.9)) screenCivilExamPassed();
+  else screenCivilExamFail('checkup', civilExamThresholds(G.examDraft));
 }
 function screenCivilExamPassed() {
   const d = G.examDraft;
+  const composite = civilExamComposite(d, d.writtenScore, d.interviewScore);
   setScreen(`
-    <h1>T5 · 22 岁 · 考公：考上了</h1>
-    <div class="card"><p>笔试、面试都过了。${civilExamTypeName(d)}${d.type === 'provincial' ? ' · ' + civilExamProvinceName(d) : ''} · ${civilExamPositionName(d)}，正式入职。</p></div>
+    <h1>${examAgeLabel()} · 考公：考上了</h1>
+    <div class="card"><p>笔试、面试、体检、考察、公示都过了。${civilExamTypeName(d)}${d.type === 'provincial' ? ' · ' + civilExamProvinceName(d) : ''} · ${civilExamPositionName(d)}，综合成绩 ${composite}（权重 ${civilExamWeightsText(d)}），正式入职。试用期 1 年。</p></div>
     <div class="actions"><button class="primary" data-act="exam-hire">正式入职</button></div>`);
 }
 function civilExamHire() {
@@ -1048,11 +1215,21 @@ function screenCivilExamFail(stage, th) {
   const s = G.state;
   const d = G.examDraft;
   const isWritten = stage === 'written';
-  const have = isWritten ? (s.attrs.skill || 0) : (s.attrs.express || 0);
-  const need = isWritten ? th.written : th.interview;
+  const isRank = stage === 'rank';
+  const isCheckup = stage === 'checkup';
+  const have = isWritten || isRank ? (d.writtenScore != null ? d.writtenScore : (s.attrs.skill || 0)) : isCheckup ? '' : (d.interviewScore != null ? d.interviewScore : (s.attrs.express || 0));
+  const need = isWritten || isRank ? th.written : isCheckup ? '' : th.interview;
+  const title = isWritten ? '笔试没过线' : isRank ? '过了线，没进面试范围' : isCheckup ? '体检 / 考察 / 公示没过' : '面试没过';
+  const body = isWritten
+    ? `笔试分 ${have}，门槛 ${need}。笔试看综合能力——准备不够，硬考就是落榜。`
+    : isRank
+      ? `笔试分 ${have}，过了合格线 ${need}，但没排进 1:3 面试范围。真实招录是按笔试成绩排名进面，过线≠进面；可以试试调剂或递补（游戏内只给改报）。`
+      : isCheckup
+        ? '体检、考察、公示三关里出了一关：这一批没录上。游戏内这一关 90% 通过，这次是那 10%。'
+        : `面试分 ${have}，门槛 ${need}。面试看表达与综合素质——准备不够，硬考就是落榜。`;
   setScreen(`
-    <h1>T5 · 22 岁 · 考公：${isWritten ? '笔试没过线' : '面试没过'}</h1>
-    <div class="card"><p>${isWritten ? '笔试' : '面试'}门槛 ${need}，你只有 ${have}。${isWritten ? '笔试看专业' : '面试看表达'}——准备不够，硬考就是落榜。</p></div>
+    <h1>${examAgeLabel()} · 考公：${title}</h1>
+    <div class="card"><p>${body}</p></div>
     <div class="actions"><button class="primary" data-act="exam-fail-repick">改报其他职位</button><button data-act="exam-fail-retype">换个考试类型</button><button data-act="exam-quit">放弃考公，回 T5 选别的工作</button></div>`);
 }
 
@@ -1249,8 +1426,12 @@ function resumeYear(turn) {
   // （否则“结束这一年”按钮又能点一次，重结算）。
   if (s.flags.yearSettledTurn === turn && s.flags.settlement) return renderSettlementCard(s);
   G.kindnessHtml = kindnessResumeHtml(s);
+  if (turn === 5 && isClinicalMajor(s)) return screenT5Clinical();
   if (turn === 5) return screenT5();
+  if (turn === 6 && isClinicalMajor(s) && !s.commitments.B) return screenReturnJobPick('clinical');
+  if (turn === 6 && s.flags.abroad) return screenAbroadYear();
   if (turn === 6) return screenT6();
+  if (turn === 7 && s.flags.abroad && !s.commitments.B) return screenReturnJobPick('abroad');
   if (turn === 12) return screenT12();
   if (turn === 14) return screenT14();
   if (turn === 16) return screenT16();
@@ -1326,8 +1507,18 @@ function enterYear(turn) {
   // 防挫败硬规则：连续 2 次承诺兑现失败 → 本年开头强制触发一次
   // “意外的善意”（H9 正向事件，100% 发生，不可跳过）。
   G.kindnessHtml = kindnessCheck(s);
+  // v1.4.3：每年开头的新机制（都不消耗主 rng——hashRoll 是独立掷骰，
+  // 不打乱 era/omen 的种子流；股票结算只读年表）。
+  expireCertStages(s); // 法考客观题 / 执业医师技能过期清零
+  resolveStockHolding(s); // 上一年买的股票，今年初按次年涨跌结算
+  maybeHiddenClue(s); // 15% 听到一条“意外”线索（3 条解锁外网）
+  maybeInterpersonalEvent(s); // T6 起在职：概率发生的人际坏事件
+  if (turn === 5 && isClinicalMajor(s)) return screenT5Clinical();
   if (turn === 5) return screenT5();
+  if (turn === 6 && isClinicalMajor(s) && !s.commitments.B) return screenReturnJobPick('clinical');
+  if (turn === 6 && s.flags.abroad) return screenAbroadYear();
   if (turn === 6) return screenT6();
+  if (turn === 7 && s.flags.abroad && !s.commitments.B) return screenReturnJobPick('abroad');
   if (turn === 12) return screenT12();
   if (turn === 14) return screenT14();
   if (turn === 16) return screenT16();
@@ -1348,6 +1539,7 @@ function enterYear(turn) {
     ${eraYearCardHtml(s, turn)}
     ${yearExtraCardsHtml(s)}
     ${eventCardHtml(ev, s)}
+    ${hiddenPlotHtml(s)}${infoChannelsHtml(s)}${interpersonalEventHtml(s)}${stockPanelHtml(s)}
     ${certHtml(s)}
     ${temptationHtml(s)}
     ${venturePanelHtml(s)}
@@ -1386,6 +1578,12 @@ function applyAction(id) {
   for (const [k, v] of Object.entries(fx)) a[k] = (a[k] || 0) + v;
   a.stress += ac.stress;
   s.yearActions.push(ac.name);
+  // v1.4.3：开源/社区活动攒人脉（ossCount）——第一次给一条外网线索；
+  // 信息渠道里的“开源社区”也读它。维持看玩家选择，不自动维持。
+  if (ac.id === 'opensrc') {
+    s.flags.ossCount = (s.flags.ossCount || 0) + 1;
+    if (s.flags.ossCount === 1) grantHiddenClue(s, '第一次做开源/社区活动，认识了圈外的人');
+  }
   autosave();
   startYearRefresh();
 }
@@ -1403,6 +1601,7 @@ function startYearRefresh() {
     ${eraYearCardHtml(s, turn)}
     ${yearExtraCardsHtml(s)}
     ${eventCardHtml(ev, s)}
+    ${hiddenPlotHtml(s)}${infoChannelsHtml(s)}${interpersonalEventHtml(s)}${stockPanelHtml(s)}
     ${certHtml(s)}
     ${temptationHtml(s)}
     ${venturePanelHtml(s)}
@@ -2415,7 +2614,8 @@ function screenSettlement() {
       ${s.flags.acceptedFate ? '<p>18 岁那年，你选择保留命运给你的起点。此后，你走出了属于自己的路。</p>' : ''}
       <p class="muted">图鉴里攒了 ${(s.lessons || []).length} 张教训卡（只继承信息，不继承数值）。</p></div>
     <div class="actions">
-      <button class="primary" data-act="restart">再来一次（解锁 S4 改写）</button>
+      <button class="primary" data-act="retire-continue">继续：走到退休年龄</button>
+      <button data-act="restart">再来一次（解锁 S4 改写）</button>
       <button data-act="export">导出存档码</button>
       <button data-act="title">回到标题</button>
     </div>`);
@@ -2450,6 +2650,14 @@ function screenT5() {
   // v1.4 (P0-1): B 卡已签署时只看已签卡，不重进毕业去向选择——否则
   // 刷新/继续回 T5 还能再签一次 B，入职现金奖励重发一遍。
   if (s.commitments.B) { showT5Signed(s); return; }
+  // v1.4.3：出国已定，刷新回 T5 不重选去向（否则能再签一份工作）。
+  if (s.flags.abroad) {
+    setScreen(`
+    <h1>T5 · 22 岁 · 出国留学已定</h1>
+    <div class="card"><p>${s.flags.abroad.funding === 'family' ? '家里出了 ' + ABROAD_COST + ' 万。' : '贷了 ' + ABROAD_COST + ' 万，Debt +2。'}你去国外读一年书：专业 +10，表达 +10，人脉 +5。T7（24 岁）回国再选工作。</p></div>
+    <div class="actions"><button class="primary" data-act="year-next" data-id="6">进入 T6 · 23 岁</button></div>`);
+    return;
+  }
   setScreen(`
     <h1>T5 · 22 岁 · 毕业去向</h1>
     <p class="intro">承诺卡 A（志愿）已在 T4 兑现——回头看，18 岁的选择把你带到了这里。你的专业是 <b>${esc(s.major ? s.major.name : '（旧存档，未记录）')}</b>${s.major && s.major.tier ? `（${esc(s.major.tier)}）` : ''}，专业系数 k = ${s.flags.majorK}，起点已定。同时签下承诺卡 B：第一份工作，锁定城市 × 行业，后续 80% 的机会只从这条线长出来。</p>
@@ -2457,7 +2665,7 @@ function screenT5() {
     ${t5EraLineHtml(s)}
     ${eraYearCardHtml(s, 5)}
     ${shengbenHtml(s, 't5')}
-    <div class="options">${T5_JOBS.map((j) => `<button class="opt" data-act="t5-pick" data-id="${j.id}"><b>${j.name}</b><span>${j.desc} 钱 +${j.money} 万/年。</span></button>`).join('')}</div>`);
+    <div class="options">${T5_JOBS.map((j) => `<button class="opt" data-act="t5-pick" data-id="${j.id}"><b>${j.name}</b><span>${j.desc}${j.money ? ` 钱 +${j.money} 万/年。` : ''}</span></button>`).join('')}</div>`);
 }
 
 // v1.4 (P0-1): B 卡已签署的只读屏——恢复/刷新回到 T5 时只看这张卡
@@ -2468,7 +2676,7 @@ function showT5Signed(s) {
     <h1>承诺卡 B 已签署</h1>
     <div class="card"><p>${b ? esc(b.text) : ''}</p>
     <p>入职奖励已在签署时发放，不会重复发放。</p></div>
-    <div class="actions"><button class="primary" data-act="year-start">进入 T6 · 23 岁</button></div>`);
+    <div class="actions"><button class="primary" data-act="year-next" data-id="6">进入 T6 · 23 岁</button></div>`);
 }
 
 function pickT5(id) {
@@ -2480,13 +2688,19 @@ function pickT5(id) {
   // v1.4.2 (补充 A)：体制内不再一键签，改走入职考试（国考 / 省考 →
   // 省份 → 职位 → 报名 → 笔试 → 面试），通过才 signT5。
   if (j && j.id === 'stable') {
-    G.examDraft = { type: null, provinceId: null, positionId: null };
+    G.examDraft = { type: null, provinceId: null, positionId: null, examTurn: s.turn };
     screenCivilExamType();
+    return;
+  }
+  // v1.4.3：出国留学不进选行业屏，改走出国付费屏（家人付 / 贷款）。
+  if (j && j.id === 'abroad') {
+    if (s.flags.abroad) { screenT5(); return; }
+    screenAbroadFunding();
     return;
   }
   // v1.2 (P1-3): T5 分两步签——先选工作（公司性质），再选行业。
   // 钱 / 压力与承诺卡 B 都在行业选完才落定。
-  G.t5Draft = { job: j };
+  G.t5Draft = { job: j, examTurn: s.turn };
   screenT5Sector();
 }
 
@@ -2494,9 +2708,10 @@ function pickT5(id) {
 // 创业公司也可以做线下服务；T9 读的是行业字段，不是公司类型。
 function screenT5Sector() {
   const j = G.t5Draft.job;
+  const t = G.t5Draft.examTurn || 5;
   const defaultSector = { bigtech: 'internet', stable: 'public', hometown: 'offline' }[j.id] || null;
   setScreen(`
-    <h1>T5 · 22 岁 · 选行业</h1>
+    <h1>T${t} · ${17 + t} 岁 · 选行业</h1>
     <p class="intro">你去了${j.name}。再选一行：你做的具体是哪一行？行业决定 T9 裁员修正、年代事件里的行业条件，不决定你是谁。</p>
     <div class="options">${SECTORS.map((sec) => `<button class="opt" data-act="t5-sector-pick" data-id="${sec.id}"><b>${sec.name}</b><span>${sec.subsectors.length ? '需再选细分：' + sec.subsectors.map((x) => x.name).join(' / ') : '没有细分。'}</span></button>`).join('')}</div>
     <p class="muted">${defaultSector ? '按这份工作，最常见的是「' + (SECTORS.find((x) => x.id === defaultSector) || {}).name + '」，但你可以选别的。' : '创业公司 / 自由职业 / 读研没有默认行业，自己选。'}</p>`);
@@ -2506,8 +2721,9 @@ function pickT5Sector(sectorId) {
   const sec = SECTORS.find((x) => x.id === sectorId) || SECTORS[SECTORS.length - 1];
   if (sec.subsectors.length) {
     G.t5Draft.sector = sec;
+    const t = G.t5Draft.examTurn || 5;
     setScreen(`
-      <h1>T5 · 22 岁 · 选细分</h1>
+      <h1>T${t} · ${17 + t} 岁 · 选细分</h1>
       <p class="intro">教培分三类：只有学科类校外培训受双减政策直接影响，素质教育与职业培训不走同一条修正。</p>
       <div class="options">${sec.subsectors.map((sub) => `<button class="opt" data-act="t5-subsector-pick" data-id="${sub.id}"><b>${sub.name}</b><span>${sub.policyExposure ? '政策暴露：高（双减直接影响）。' : '政策暴露：低。'}</span></button>`).join('')}</div>`);
     return;
@@ -2536,17 +2752,17 @@ function signT5(j, sec, sub) {
   s.flags.jobProfile = {
     employerType: j.id, sector: sec.id, sectorName: SECTOR_DISPLAY[sec.id] || sec.name,
     subsector: sub ? sub.id : null, policyExposure: sub ? !!sub.policyExposure : false,
-    salaryAnnual: j.money, startTurn: 5,
+    salaryAnnual: j.money, startTurn: s.turn,
   };
   s.flags.housing = 'rent';
-  s.commitments.B = { text: '第一份工作：' + j.name + ' · ' + sec.name + (sub ? ' · ' + sub.name : ''), signedAt: 'T5', dueTurn: 6, snapshot: { ...s.attrs } };
+  s.commitments.B = { text: '第一份工作：' + j.name + ' · ' + sec.name + (sub ? ' · ' + sub.name : ''), signedAt: 'T' + s.turn, dueTurn: s.turn + 1, snapshot: { ...s.attrs } };
   G.t5Draft = null;
   autosave('承诺 B 已签署');
   Analytics.track('commitment', { card: 'B', choice: j.id });
   setScreen(`
     <h1>承诺卡 B 已签署</h1>
     <div class="card"><p>你去了${j.name}（${sec.name}${sub ? ' · ' + sub.name : ''}）。这条线的 NPC 池已经换了——接下来几年遇到的人，大多从这里来。</p></div>
-    <div class="actions"><button class="primary" data-act="year-next" data-id="6">进入 T6 · 23 岁</button></div>`);
+    <div class="actions"><button class="primary" data-act="year-next" data-id="${s.turn + 1}">进入 T${s.turn + 1} · ${18 + s.turn} 岁</button></div>`);
 }
 
 function screenT6() {
@@ -2581,6 +2797,379 @@ function pickT6(id) {
     <div class="actions"><button class="primary" data-act="year-next" data-id="7">进入 T7 · 24 岁</button></div>`);
 }
 
+// ---------- v1.4.3：临床医学 T5 方向、T6/T7 返岗选工作、出国 ----------
+function isClinicalMajor(s) { return !!(s.major && s.major.name === '临床医学'); }
+function screenT5Clinical() {
+  const s = G.state;
+  const done = s.flags.clinicalPath;
+  if (done) {
+    const label = { residency: '毕业后规培 3 年', 'master-pro': '考研专硕（并轨，四证合一）', 'master-academic': '考研学硕' }[done.path] || done.path;
+    setScreen(`
+    <h1>T5 · 22 岁 · 方向已定</h1>
+    <div class="card"><p>你选了「${label}」。临床五年制，23 岁毕业，工作到时再选。</p></div>
+    <div class="actions"><button class="primary" data-act="year-next" data-id="6">进入 T6 · 23 岁</button></div>`);
+    return;
+  }
+  setScreen(`
+    <h1>T5 · 22 岁 · 临床医学：还没毕业</h1>
+    <p class="intro">临床医学是五年制：你 23 岁才毕业，现在 22 岁还在读大五。先定方向——规培、考研专硕还是考研学硕？工作 T6（23 岁）毕业时再选。</p>
+    <div class="options">
+      <button class="opt" data-act="clinical-path" data-id="residency"><b>毕业后规培 3 年</b><span>住院医师规范化培训 3 年，拿住培证才能考主治。执业医师 T7（24 岁，见习满 1 年）可考。</span></button>
+      <button class="opt" data-act="clinical-path" data-id="master-pro"><b>考研专硕（并轨，四证合一）</b><span>专硕并轨：毕业时学位证、毕业证、执业医师证、住培证四证合一，最多省 1 年。</span></button>
+      <button class="opt" data-act="clinical-path" data-id="master-academic"><b>考研学硕</b><span>学硕不并轨：毕业后还要再规培 3 年，路更长，但科研路子宽。</span></button>
+    </div>
+    <p class="muted">方向只影响叙事与记录，不改变 T6 选岗（规培/考研的年限差异未建模）。</p>`);
+}
+function pickClinicalPath(id) {
+  const s = G.state;
+  if (!isClinicalMajor(s) || s.flags.clinicalPath) return;
+  s.flags.clinicalPath = { path: id, turn: 5 };
+  autosave('临床方向已定');
+  screenT5Clinical();
+}
+function screenAbroadFunding() {
+  const s = G.state;
+  const money = s.attrs.money || 0;
+  setScreen(`
+    <h1>T5 · 22 岁 · 出国留学：钱从哪来</h1>
+    <p class="intro">学费+生活费共 ${ABROAD_COST} 万。你现在现金 ${money} 万。</p>
+    <div class="options">
+      <button class="opt" data-act="abroad-fund" data-id="family" ${money < ABROAD_COST ? 'disabled' : ''}><b>家人付费 ${ABROAD_COST} 万</b><span>现金 −${ABROAD_COST} 万。${money < ABROAD_COST ? '（现金不够）' : ''}</span></button>
+      <button class="opt" data-act="abroad-fund" data-id="loan"><b>贷款 ${ABROAD_COST} 万</b><span>Debt +2（Debt 是 0–5 档，≥3 起计息，5 封顶）。回国后慢慢还。</span></button>
+    </div>
+    <div class="actions"><button data-act="abroad-back">返回重选去向</button></div>`);
+}
+function confirmAbroadFunding(kind) {
+  const s = G.state;
+  if (s.commitments.B) { showT5Signed(s); return; }
+  if (kind === 'family') {
+    if ((s.attrs.money || 0) < ABROAD_COST) { screenAbroadFunding(); return; }
+    s.attrs.money -= ABROAD_COST;
+    s.flags.abroad = { funding: 'family', cost: ABROAD_COST, returnTurn: 7 };
+  } else if (kind === 'loan') {
+    s.attrs.debt = Math.min(5, (s.attrs.debt || 0) + 2);
+    s.flags.abroad = { funding: 'loan', cost: ABROAD_COST, returnTurn: 7 };
+  } else return;
+  s.attrs.skill += 10;
+  s.attrs.express += 10;
+  s.attrs.network += 5;
+  autosave('出国留学已定');
+  setScreen(`
+    <h1>T5 · 22 岁 · 出国留学已定</h1>
+    <div class="card"><p>${kind === 'family' ? '家里出了 ' + ABROAD_COST + ' 万。' : '贷了 ' + ABROAD_COST + ' 万，Debt +2。'}你去国外读一年书：专业 +10，表达 +10，人脉 +5。T7（24 岁）回国再选工作。</p></div>
+    <div class="actions"><button class="primary" data-act="year-next" data-id="6">进入 T6 · 23 岁</button></div>`);
+}
+function screenAbroadYear() {
+  setScreen(`
+    <h1>T6 · 23 岁 · 在国外读书</h1>
+    <div class="card"><p>这一年在国外读书：语言、课程、生活，全是新的。没有站队，没有入职——明年回国再选工作。</p></div>
+    <div class="actions"><button class="primary" data-act="year-next" data-id="7">进入 T7 · 24 岁</button></div>`);
+}
+function screenReturnJobPick(kind) {
+  const s = G.state;
+  const title = kind === 'clinical' ? 'T6 · 23 岁 · 毕业选工作' : 'T7 · 24 岁 · 回国选工作';
+  const intro = kind === 'clinical'
+    ? '临床五年制毕业了：23 岁，工作现在选。执业医师要到 T7（24 岁，见习满 1 年）才可考。'
+    : '在国外读了一年书，回来了：24 岁，工作现在选。承诺卡 B 现在签。';
+  setScreen(`
+    <h1>${title}</h1>
+    <p class="intro">${intro}你的专业是 <b>${esc(s.major ? s.major.name : '（旧存档，未记录）')}</b>，专业系数 k = ${s.flags.majorK}。</p>
+    <div class="options">${T5_JOBS.filter((j) => j.id !== 'abroad').map((j) => `<button class="opt" data-act="t5-pick" data-id="${j.id}"><b>${j.name}</b><span>${j.desc}${j.money ? ` 钱 +${j.money} 万/年。` : ''}</span></button>`).join('')}</div>`);
+}
+
+// ---------- v1.4.3：隐藏剧情（外网） ----------
+// 开局即有：家庭从事外贸/制造，或经济档 E3/E4（“层次高”）。
+function hiddenPlotStartUnlocked(s) {
+  const o = s.origin || {};
+  if (o.bg && o.bg.trading) return true;
+  const tier = o.econ && o.econ.tier;
+  return tier === 'E3' || tier === 'E4';
+}
+function hiddenClues(s) { return ((s.flags.hiddenPlots || {}).internet || {}).clues || 0; }
+function internetUnlocked(s) {
+  if (hiddenPlotStartUnlocked(s)) return true;
+  return !!((s.flags.hiddenPlots || {}).internet || {}).unlocked;
+}
+function grantHiddenClue(s, why) {
+  if (internetUnlocked(s)) return false;
+  s.flags.hiddenPlots = s.flags.hiddenPlots || {};
+  const p = s.flags.hiddenPlots.internet || { clues: 0 };
+  p.clues = (p.clues || 0) + 1;
+  if (p.clues >= 3) { p.unlocked = true; p.clues = 3; }
+  s.flags.hiddenPlots.internet = p;
+  s.yearlyLog.push({ turn: s.turn, type: 'hidden-clue', text: why + '（外网线索 ' + p.clues + '/3' + (p.unlocked ? '，解锁了！' : '）') });
+  return true;
+}
+function maybeHiddenClue(s) {
+  if (s.turn < 2 || internetUnlocked(s)) return;
+  if (hashRoll(s.seed, s.turn, 'hidden-clue') < 0.15) {
+    grantHiddenClue(s, '你偶然听到有人提起墙外的事');
+  }
+}
+// 文字尝试解锁：不是所有点子都给达成，要看条件与可行性。
+// 返回 { ok, reason }；ok 时直接解锁。
+function attemptHiddenUnlock(s, text) {
+  const t = String(text || '');
+  if (internetUnlocked(s)) return { ok: true, reason: '已经解锁了。' };
+  if (!t.trim()) return { ok: false, reason: '先写一句你打算怎么办。' };
+  const has = (...keys) => keys.some((k) => t.indexOf(k) >= 0);
+  const unlock = () => {
+    s.flags.hiddenPlots = s.flags.hiddenPlots || {};
+    s.flags.hiddenPlots.internet = { clues: 3, unlocked: true };
+    s.flags.hiddenLast = { turn: s.turn, ok: true, text: '这个办法走通了：你能登陆外网了。' };
+    return { ok: true, reason: '这个办法走通了：你能登陆外网了。' };
+  };
+  const reject = (reason) => {
+    s.flags.hiddenLast = { turn: s.turn, ok: false, text: reason };
+    return { ok: false, reason };
+  };
+  if (has('出国', '留学', '交换生')) {
+    if ((s.attrs.money || 0) >= 10) return unlock();
+    return reject('出国/留学要花钱：你现在手头不到 10 万，这条路走不通。');
+  }
+  if (has('认识', '朋友', '同学', '同事') && has('外国', '留学生', '外企')) {
+    if ((s.attrs.network || 0) >= 30) return unlock();
+    return reject('认识外国朋友/留学生要有人脉：你的人脉还不到 30。');
+  }
+  if (has('外贸', '家里生意', '亲戚')) {
+    if (s.origin && s.origin.bg && s.origin.bg.trading) return unlock();
+    return reject('家里没有外贸生意，这条路没有现成的口子。');
+  }
+  if (has('翻墙', 'VPN', '代理')) {
+    if ((s.attrs.skill || 0) >= 25) return unlock();
+    return reject('自己搭梯子要懂技术：你的专业还不到 25。');
+  }
+  if (has('开源', '社区', 'GitHub')) {
+    if ((s.flags.ossCount || 0) >= 1) return unlock();
+    return reject('开源社区这条线，你得先真的去做一次开源/社区活动（年屏行动里有）。');
+  }
+  return reject('这个办法在你现在的情况下走不通：没钱、没人、没技术，哪个口子都对不上。');
+}
+function hiddenPlotHtml(s) {
+  if (s.turn < 2 || s.turn === 9) return '';
+  if (internetUnlocked(s)) {
+    return `<div class="card"><h2>隐藏剧情：能登陆外网</h2><p>你已经能登陆外网了。墙外的信息是另一条线：有些事，别人还不知道。</p></div>`;
+  }
+  const last = s.flags.hiddenLast && s.flags.hiddenLast.turn === s.turn ? `<p>${esc(s.flags.hiddenLast.text)}</p>` : '';
+  return `<div class="card"><h2>隐藏剧情：墙外的消息</h2><p>你听说墙外有些消息，但一直没摸到门。线索 ${hiddenClues(s)}/3（每年可能偶然听到一条；第一次做开源/社区活动也给一条）。或者，你自己写一句打算怎么办——条件够了就能走通，不够就走不通。</p>${last}
+    <p><input id="hidden-text" type="text" placeholder="比如：我想认识一个留学生朋友……" maxlength="60"></p>
+    <div class="actions"><button class="primary" data-act="hidden-try">试试这个办法</button></div></div>`;
+}
+function infoChannelsHtml(s) {
+  if (s.turn < 2 || s.turn === 9) return '';
+  const chans = [];
+  if (s.flags.employment && s.flags.employment !== 'grad') chans.push('同事/上司');
+  if ((s.flags.ossCount || 0) >= 1) chans.push('开源社区');
+  if (internetUnlocked(s)) chans.push('外网');
+  if (isPublicJob(s)) chans.push('体制内内部消息');
+  if (!chans.length) return '';
+  return `<div class="card"><h2>信息渠道</h2><p>你现在能听到消息的地方：${chans.join('、')}。渠道越多，越不容易被人蒙住。</p></div>`;
+}
+
+// ---------- v1.4.3：职场人际事件（报告 §7，95 条） ----------
+// 公司类型：T5 工作 id → 事件 trigger.company 取值。
+function companyTypeOf(s) {
+  const t = s.flags.jobProfile && s.flags.jobProfile.employerType;
+  return { bigtech: 'large', startup: 'startup', hometown: 'small', stable: 'public' }[t] || null;
+}
+// 概率模型（Allen 2026-11-21 16:43 原话 + GAME_BALANCE）：
+// 基础每年 25%；谈吐高（表达 ≥30）×0.8；社交广（人脉 ≥30）×0.8；
+// 家庭经济档高（E3/E4）×0.8（家里有底气，不容易被拿捏）；
+// 很专业又有脾气（专业 ≥40 且压力 <40）×0.5（不易被当血包）；
+// 很专业但很忙（专业 ≥40 且压力 ≥60）×1.5（易被当成血包）；
+// web3 行业 ×1.5（Allen 个人判断，见下）；创业公司 ×1.2；体制内 ×0.8。
+function interpersonalChance(s) {
+  let p = 0.25;
+  if ((s.attrs.express || 0) >= 30) p *= 0.8;
+  if ((s.attrs.network || 0) >= 30) p *= 0.8;
+  const tier = s.origin && s.origin.econ && s.origin.econ.tier;
+  if (tier === 'E3' || tier === 'E4') p *= 0.8;
+  const skill = s.attrs.skill || 0, stress = s.attrs.stress || 0;
+  if (skill >= 40 && stress < 40) p *= 0.5;
+  else if (skill >= 40 && stress >= 60) p *= 1.5;
+  if (s.flags.jobProfile && s.flags.jobProfile.employerType === 'startup') p *= 1.2;
+  if (isPublicJob(s)) p *= 0.8;
+  if (s.flags.jobProfile && s.flags.jobProfile.sector === 'web3') p *= 1.5; // Allen 个人判断（2026-11-21 16:46 原话“属于是私人恩怨了”），不当调研结论
+  return Math.min(0.8, p);
+}
+function interpersonalEligible(s, ev) {
+  const tr = ev.trigger || {};
+  if (tr.sector === 'web3') return !!(s.flags.jobProfile && s.flags.jobProfile.sector === 'web3');
+  if (s.flags.jobProfile && s.flags.jobProfile.sector === 'web3') return false; // web3 只走 web3 事件
+  const comp = companyTypeOf(s);
+  if (tr.company && tr.company.length) return !!(comp && tr.company.indexOf(comp) >= 0);
+  return true;
+}
+function interpersonalEventFor(s) {
+  const pool = INTERPERSONAL_EVENTS.filter((ev) => interpersonalEligible(s, ev));
+  if (!pool.length) return null;
+  const idx = Math.floor(hashRoll(s.seed, s.turn, 'interpersonal-pick') * pool.length);
+  return pool[idx];
+}
+function maybeInterpersonalEvent(s) {
+  // 只在通用年屏年份发生（T7/T8/T10/T11/T13/T15/T17）：特殊年份
+  // （T6 站队、T12/T14/T16/T18 承诺年）没有年屏，卡片无处可放。
+  if (s.turn < 7 || [12, 14, 16, 18].indexOf(s.turn) >= 0) return;
+  if (!s.flags.employment || s.flags.employment === 'grad') return;
+  if (s.flags.interpersonalYear === s.turn) return; // 每年最多一件
+  if (hashRoll(s.seed, s.turn, 'interpersonal') >= interpersonalChance(s)) return;
+  const ev = interpersonalEventFor(s);
+  if (!ev) return;
+  for (const [k, v] of Object.entries(ev.effect || {})) s.attrs[k] = (s.attrs[k] || 0) + v;
+  s.flags.interpersonalYear = s.turn;
+  s.flags.interpersonalLast = { turn: s.turn, id: ev.id, cat: ev.cat, title: ev.title, body: ev.body, hidden: !!((ev.trigger || {}).hidden) };
+  s.yearlyLog.push({ turn: s.turn, type: 'interpersonal', text: '职场人际：' + ev.title });
+}
+function interpersonalEventHtml(s) {
+  const last = s.flags.interpersonalLast;
+  if (!last || last.turn !== s.turn) return '';
+  const cat = (INTERPERSONAL_EVENT_CATS[last.cat] || {}).name || last.cat;
+  return `<div class="card"><h2>职场人际：${esc(last.title)}</h2><p class="muted">（${esc(cat)}${last.hidden ? ' · 局中局：当时没看明白，事后才懂' : ''}）</p><p>${esc(last.body)}</p><p class="muted">这件事已经发生了，影响进了你的状态。不是所有坏事都能躲开。</p></div>`;
+}
+
+// ---------- v1.4.3：股票线（报告 §8，上证 2010–2025 年表） ----------
+// 规则（GAME_BALANCE，灵感来自 §8.4 的 T+1 与主板 ±10% 涨跌停——
+// 这两条本身只核实到搜索摘要级，机制是简化口径）：年屏上可买 5 万
+// （须现金 ≥5 万）；持有一年，下一年初按次年涨跌结算，涨跌幅封顶
+// ±10%；只看上证，不看深证成指/沪深 300/创业板点位，不看散户盈亏比。
+function stockCalendarYear(s) { return eraContextFor(s, s.turn).calendarYear; }
+function stockPanelHtml(s) {
+  if (s.turn < 2 || s.turn === 9) return '';
+  const cy = stockCalendarYear(s);
+  const row = stockYear(cy);
+  if (!row) return '';
+  const holding = s.flags.stocks && s.flags.stocks.holding;
+  const last = s.flags.stocks && s.flags.stocks.last;
+  const result = last && last.turn === s.turn ? `<p>${esc(last.text)}</p>` : '';
+  const events = STOCK_MAJOR_EVENTS.filter((e) => Number(e.date.slice(0, 4)) === cy);
+  const eventLine = events.length ? `<p class="muted">${events.map((e) => esc(e.date + ' ' + e.title + '：' + e.body)).join(' ')}</p>` : '';
+  const buyBtn = holding
+    ? `<p>持有中：${holding.amount} 万（${holding.buyYear} 年买入），明年初按次年涨跌结算（封顶 ±10%）。</p>`
+    : `<button class="opt" data-act="stock-buy" ${(s.attrs.money || 0) < 5 ? 'disabled' : ''}><b>买入上证指数 5 万</b><span>现金须 ≥5 万。买入后持有一年，下一年初按次年涨跌结算，涨跌幅封顶 ±10%（主板涨跌停口径）。${(s.attrs.money || 0) < 5 ? '（现金不够）' : ''}</span></button>`;
+  return `<div class="card"><h2>股票：上证指数 ${cy} 年</h2>${result}<p>年末收盘 ${row.close} 点，年涨跌 ${row.change > 0 ? '+' : ''}${row.change}%（${esc(row.regime)}）。</p>${eventLine}${buyBtn}</div>`;
+}
+function buyStock(s) {
+  if (!s || (s.attrs.money || 0) < 5) return false;
+  s.flags.stocks = s.flags.stocks || {};
+  if (s.flags.stocks.holding) return false;
+  s.attrs.money -= 5;
+  s.flags.stocks.holding = { amount: 5, buyTurn: s.turn, buyYear: stockCalendarYear(s) };
+  autosave('买入股票');
+  return true;
+}
+function resolveStockHolding(s) {
+  const st = s.flags.stocks;
+  if (!st || !st.holding || st.holding.buyTurn >= s.turn) return;
+  const cy = stockCalendarYear(s);
+  const row = stockYear(cy);
+  const raw = row ? row.change : 0;
+  const pct = Math.max(-10, Math.min(10, raw));
+  const gain = Math.round(st.holding.amount * pct / 100 * 100) / 100;
+  s.attrs.money = Math.round(((s.attrs.money || 0) + st.holding.amount + gain) * 100) / 100;
+  st.last = { turn: s.turn, text: `股票结算：${st.holding.buyYear} 年买入的 ${st.holding.amount} 万，按 ${cy} 年涨跌 ${raw > 0 ? '+' : ''}${raw}%（封顶 ±10%，按 ${pct}% 算）结算，本金 + 收益 ${gain > 0 ? '+' : ''}${gain} 万，现金 ${s.attrs.money} 万。${row ? '' : '该年无历史数据，按 0% 结算。'}` };
+  st.holding = null;
+  s.yearlyLog.push({ turn: s.turn, type: 'stock', text: st.last.text });
+}
+
+// ---------- v1.4.3：退休（Allen 2026-11-21 17:11 定方案 B） ----------
+// 36 岁到退休年龄是压缩的尾声，不是逐年回合：T18 结算后可选“继续”，
+// 选退休类别（算出退休年龄/年份）→ 选最多 2 项退休活动 → 终局结算。
+function screenRetireIntro() {
+  const s = G.state;
+  const birthYear = s.flags.era && s.flags.era.birthYear;
+  if (!birthYear) {
+    setScreen(`
+    <h1>走到退休年龄</h1>
+    <div class="card"><p>要算退休年龄，得先知道你哪年出生。</p>
+    <p><input id="retire-birth" type="text" placeholder="比如：1995" maxlength="4"></p></div>
+    <div class="actions"><button class="primary" data-act="retire-birth">填好了，继续</button><button data-act="t18-settle">不走了，就到这里</button></div>`);
+    return;
+  }
+  const rows = RETIREMENT_CATEGORIES.map((c) => {
+    const a = retirementAgeFor(birthYear, c.id);
+    return `<button class="opt" data-act="retire-cat" data-id="${c.id}"><b>${c.name}</b><span>${c.desc}你 ${birthYear} 年出生，退休年龄 ${a.years} 岁${a.months ? a.months + ' 个月' : ''}（${retirementYearFor(birthYear, c.id)} 年）。</span></button>`;
+  }).join('');
+  setScreen(`
+    <h1>走到退休年龄</h1>
+    <p class="intro">35 岁结算完了，但人生还没完。按中国现行口径（渐进式延迟退休改革，2025 年起 15 年过渡期）：男 60→63 岁，女干部/管理技术岗 55→58 岁，女工人/生产操作岗 50→55 岁。你是哪一类？</p>
+    <p class="muted">36 岁到退休是压缩的尾声，不是一年一年过的回合；选完类别，再选退休后做的事，最后结算。</p>
+    <div class="options">${rows}</div>
+    <div class="actions"><button data-act="t18-settle">不走了，就到这里</button></div>`);
+}
+function pickRetireCategory(id) {
+  const s = G.state;
+  const birthYear = s.flags.era && s.flags.era.birthYear;
+  if (!birthYear) return;
+  const cat = RETIREMENT_CATEGORIES.find((c) => c.id === id);
+  if (!cat) return;
+  const a = retirementAgeFor(birthYear, id);
+  s.flags.retirement = {
+    category: id, retireAgeYears: a.years, retireAgeMonths: a.months,
+    retireYear: retirementYearFor(birthYear, id), activities: [], done: false,
+  };
+  autosave('退休类别已定');
+  screenRetireActivities();
+}
+function screenRetireActivities() {
+  const s = G.state;
+  const r = s.flags.retirement;
+  if (!r) { screenRetireIntro(); return; }
+  const picked = r.activities || [];
+  const rows = RETIREMENT_ACTIVITIES.map((a) => {
+    const on = picked.indexOf(a.id) >= 0;
+    return `<button class="opt" data-act="retire-act" data-id="${a.id}" ${!on && picked.length >= 2 ? 'disabled' : ''}><b>${on ? '✓ ' : ''}${a.name}</b><span>${a.desc}</span></button>`;
+  }).join('');
+  setScreen(`
+    <h1>退休之后做什么</h1>
+    <p class="intro">你 ${r.retireAgeYears} 岁${r.retireAgeMonths ? r.retireAgeMonths + ' 个月' : ''}退休（${r.retireYear} 年）。退休后做的事，最多选 2 项。</p>
+    <div class="options">${rows}</div>
+    <div class="actions"><button class="primary" data-act="retire-done" ${picked.length ? '' : 'disabled'}>就这些，去终局结算</button></div>`);
+}
+function toggleRetireActivity(id) {
+  const s = G.state;
+  const r = s.flags.retirement;
+  if (!r) return;
+  r.activities = r.activities || [];
+  const i = r.activities.indexOf(id);
+  if (i >= 0) r.activities.splice(i, 1);
+  else if (r.activities.length < 2) r.activities.push(id);
+  autosave('退休活动已选');
+  screenRetireActivities();
+}
+function finishRetirement() {
+  const s = G.state;
+  const r = s.flags.retirement;
+  if (!r || !(r.activities || []).length) return;
+  for (const id of r.activities) {
+    const a = RETIREMENT_ACTIVITIES.find((x) => x.id === id);
+    if (!a) continue;
+    for (const [k, v] of Object.entries(a.fx || {})) s.attrs[k] = Math.max(0, (s.attrs[k] || 0) + v);
+  }
+  r.done = true;
+  autosave('退休活动结算');
+  screenFinalSettlement();
+}
+function screenFinalSettlement() {
+  const s = G.state;
+  const r = s.flags.retirement || {};
+  const sc = obsessionScore(s);
+  const acts = (r.activities || []).map((id) => (RETIREMENT_ACTIVITIES.find((x) => x.id === id) || {}).name).join('、') || '什么都没做';
+  const cat = (RETIREMENT_CATEGORIES.find((x) => x.id === r.category) || {}).name || '';
+  setScreen(`
+    <h1>终局结算 · ${r.retireAgeYears ? r.retireAgeYears + ' 岁' : ''}退休</h1>
+    <div class="card"><h2>${ENDING_NAMES[sc.ending]}（${sc.total} 分）</h2><p>${ENDING_TEXT[sc.ending]}</p></div>
+    <div class="card"><h2>退休这一段</h2>
+      <p>${cat}，${r.retireAgeYears ? r.retireAgeYears + ' 岁' + (r.retireAgeMonths ? r.retireAgeMonths + ' 个月' : '') : ''}退休（${r.retireYear || ''} 年）。36 岁到退休之间，你做的事：${acts}。</p>
+      <p class="muted">执念分按 35 岁结算时算（${sc.total} 分）；退休这段只改状态，不改执念分——35 岁那张答卷已经交了。</p></div>
+    <div class="card"><h2>最后的状态</h2>
+      <p>钱 ${s.attrs.money} 万 · 健康 ${s.attrs.health} · 压力 ${s.attrs.stress}（${pressureTier(s.attrs.stress).name}）· 家庭线 ${s.attrs.family} · Debt ${s.attrs.debt} · 影响力 ${s.attrs.influence}</p></div>
+    <div class="actions">
+      <button class="primary" data-act="restart">再来一次（解锁 S4 改写）</button>
+      <button data-act="export">导出存档码</button>
+      <button data-act="title">回到标题</button>
+    </div>`);
+}
+
 // ---------- T9 slice ----------
 // 切片走哪条危机线，由雇佣关系定（P0-7），不是由 t9Branch 的事后
 // 标签定：有雇主的走裁员线（H2），创业 / 读研 / 自由职业走各自的
@@ -2598,7 +3187,12 @@ function sliceBranch(s) {
 }
 function sliceDecisions(s) {
   const b = sliceBranch(s);
-  if (b === 'startup' || b === 'grad' || b === 'freelance' || b === 'public') {
+  if (b === 'public') {
+    // v1.4.3：体制内第三件事不再沿用大厂的 borrow-home（“空窗期至少
+    // 三个月”文案只属于裁员线），改用 branchThird.public（借调外地）。
+    return [T9_SLICE.branchFirst[b], T9_SLICE.branchSecond[b], T9_SLICE.branchThird.public];
+  }
+  if (b === 'startup' || b === 'grad' || b === 'freelance') {
     return [T9_SLICE.branchFirst[b], T9_SLICE.branchSecond[b], T9_SLICE.decisions[2]];
   }
   return T9_SLICE.decisions;
@@ -3066,6 +3660,7 @@ document.addEventListener('click', (e) => {
     case 'start': startNew('full'); break;
     case 'slice': startNew('slice'); break;
     case 'continue': {
+      G.resetArmed = false; // v1.4.3：继续清掉重开武装
       const s = loadGame(G.pickedSlot);
       if (!s) break;
       G.state = s;
@@ -3074,6 +3669,8 @@ document.addEventListener('click', (e) => {
       if (s.turn === 0) screenDice();
       else if (s.turn === 1) screenT1();
       else if (s.turn === 9) enterSlice(false);
+      else if (s.flags.retirement && s.flags.retirement.done) screenFinalSettlement();
+      else if (s.flags.retirement && s.flags.retirement.category) screenRetireActivities();
       else if (s.finished) screenSettlement();
       else if (s.turn === 18) screenT18();
       else startYear(s.turn);
@@ -3402,6 +3999,7 @@ document.addEventListener('click', (e) => {
     case 'exam-confirm': screenCivilExamWritten(); break;
     case 'exam-written': resolveCivilExamWritten(); break;
     case 'exam-interview': resolveCivilExamInterview(); break;
+    case 'exam-checkup': resolveCivilExamCheckup(); break;
     case 'exam-hire': civilExamHire(); break;
     case 'exam-back': if (G.examDraft && G.examDraft.type === 'provincial') screenCivilExamProvince(); else screenCivilExamType(); break;
     case 'exam-back-type': screenCivilExamType(); break;
@@ -3414,6 +4012,16 @@ document.addEventListener('click', (e) => {
     case 'transfer-major': if (attemptTransferMajor(G.state, G.rng)) startYearRefresh(); break;
     // v1.4.2：考证学习 + 官场诱惑。
     case 'cert-study': if (certStudy(G.state, id)) startYearRefresh(); break;
+    case 'clinical-path': pickClinicalPath(id); break;
+    case 'abroad-fund': confirmAbroadFunding(id); break;
+    case 'abroad-back': screenT5(); break;
+    case 'hidden-try': {
+      const inp = document.querySelector('#hidden-text');
+      attemptHiddenUnlock(G.state, inp ? inp.value : '');
+      startYearRefresh();
+      break;
+    }
+    case 'stock-buy': if (buyStock(G.state)) startYearRefresh(); break;
     case 'tempt-moonlight': acceptMoonlight(G.state); startYearRefresh(); break;
     case 'tempt-xiahai': acceptXiahai(G.state); startYearRefresh(); break;
     case 'tempt-decline': declineTemptation(G.state); startYearRefresh(); break;
@@ -3435,6 +4043,21 @@ document.addEventListener('click', (e) => {
     case 't16-pick': pickT16(id); break;
     case 't18-pick': pickT18(id); break;
     case 't18-settle': screenSettlement(); break;
+    case 'retire-continue': screenRetireIntro(); break;
+    case 'retire-birth': {
+      const inp = document.querySelector('#retire-birth');
+      const y = inp ? Number((inp.value || '').trim()) : NaN;
+      if (y >= 1900 && y <= 2010) {
+        G.state.flags.era = G.state.flags.era || {};
+        G.state.flags.era.birthYear = y;
+        autosave('出生年份已补');
+        screenRetireIntro();
+      }
+      break;
+    }
+    case 'retire-cat': pickRetireCategory(id); break;
+    case 'retire-act': toggleRetireActivity(id); break;
+    case 'retire-done': finishRetirement(); break;
     case 'kindness-accept': kindnessAccept(G.state); resumeYear(G.state.turn); break;
     case 'kindness-defer': kindnessDefer(G.state); resumeYear(G.state.turn); break;
     case 'kindness-decline': kindnessDecline(G.state); resumeYear(G.state.turn); break;
@@ -3567,6 +4190,7 @@ document.addEventListener('click', (e) => {
       else sliceEnd();
       break;
     case 'restart':
+      G.resetArmed = false; // v1.4.3：再来一次清掉重开武装
       G.state.runNumber = (G.state.runNumber || 1) + 1;
       saveMeta(G.meta);
       screenTitle();
@@ -3575,10 +4199,18 @@ document.addEventListener('click', (e) => {
     case 'import': importSave(); break;
     case 'import-do': doImport(); break;
     case 'reset':
+      // v1.4.3：原生 confirm() 双击会丢控制、存档未清——改成页内两步
+      // 确认：第一次点只武装（按钮文案变，不清档），第二次点才真正清档。
+      // 武装状态存在 G.resetArmed 里，标题屏按它显示文案；开始新局 /
+      // 继续 / 重开 / 回标题会清掉武装。
+      if (!G.resetArmed) { G.resetArmed = true; screenTitle(); break; }
+      G.resetArmed = false;
       // v1.3 (P0-4): 重置只清当前槽位的本地存档，不清全局 meta——
       // 其他槽位的存档、教训卡图鉴、演练记忆（npcMemory）都是共享
       // 资料，重置一个周目位不得把它们一起抹掉。
-      if (confirm(`清除 ${G.pickedSlot} 号位的本地存档，回到标题？（其他周目位与共享图鉴、演练记忆不受影响）`)) { clearSave(G.pickedSlot); screenTitle(); }
+      clearSave(G.pickedSlot);
+      G.state = null;
+      screenTitle();
       break;
     case 'analytics-toggle': {
       const off = !Analytics.optedOut();
@@ -3586,8 +4218,8 @@ document.addEventListener('click', (e) => {
       refreshAnalyticsNote();
       break;
     }
-    case 'back': screenTitle(); break;
-    case 'title': screenTitle(); break;
+    case 'back': G.resetArmed = false; screenTitle(); break;
+    case 'title': G.resetArmed = false; screenTitle(); break;
   }
 });
 

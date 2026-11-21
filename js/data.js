@@ -175,22 +175,43 @@ const ACTIONS = [
 // Allen 的模型：成功看三项——考试难度、你的天赋、付出的时间；
 // 10000 小时后必过；天赋是时间乘数。实现口径（对 Allen 原话的
 // 解读，如他纠正再改）：有效小时 = 投入小时 × 天赋乘数；每种证书
-// 有难度（以所需有效小时计）；有效小时 ≥ 难度即通过；最难证书
-// 难度 10000，所以 10000 有效小时必过任何考试。天赋乘数 = 专业
-// 系数 k（开局封存，0.65–1.3；study 行动已用同一乘数，见
-// applyAction），不另建天赋 stat。1 AP 考证学习 = 500 投入小时：
-// 以 k=1 计，四级 1 AP、六级 2 AP、教资 3 AP、软考 5 AP、法考
-// 12 AP、注会 20 AP——注会是整局的追求，不是大学四年的事。
+// 有难度（以所需有效小时计）；有效小时 ≥ 难度即通过。天赋乘数 =
+// 专业系数 k（开局封存，0.65–1.3；study 行动已用同一乘数，见
+// applyAction），不另建天赋 stat。1 AP 考证学习 = 500 投入小时。
+// v1.4.3（§9 校准，报告真实值）：旧难度整体高估 2–8 倍，按报告
+// §2.5 的区间上限取：四级 250（0.5 AP）、六级 500、教资 750、
+// 软考 1000、法考 1500（客观 1000 + 主观 500）、执业医师 1500
+// （技能 500 + 综合 1000）、注会 2000（§2 复核 2026-11-21 已核实：
+// 六科、60 分合格、单科 5 年有效、无专业限制）。备考小时数是培训
+// 机构口径，未核实官方统计，见设计文档。注会/法考 = 2000/1500 ≈
+// 1.33：两者均取区间上限，报告 §9.2 的“真实 ~2”是下限口径
+// （1500/800 ≈ 1.9）；顺序（注会最难）仍成立。10000 小时必过
+// （Allen 模型）仍成立：最难的证只要 2000 有效小时。
+// 法考两阶段 + 客观题两年有效（§1 已核实）；执业医师两阶段 +
+// 技能 2 年有效（§6；备考小时数未找到，1500 为判断值）；教资在校
+// 三年级以上可报（ntce 已核实，T3 起）；软考两科同次通过 / 45/75
+// 分 / 证书有效期年限未核实（ruankao.org.cn 被防火墙拦截），不建模。
 // 证书按游戏内专业挑：计算机→软考，法学→法考，会计/金融→注会，
-// 师范→教资，英语/通用→四六级（T1_MAJORS 有这 10 个专业）。
+// 师范→教资，英语/通用→四六级；临床医学→执业医师（T7 起，见习满 1 年）。
 const CERT_HOURS_PER_AP = 500;
 const CERTS = [
-  { id: 'cet4', name: '大学英语四级', difficulty: 500, bonus: { express: 5 }, bonusText: '表达 +5' },
-  { id: 'cet6', name: '大学英语六级', difficulty: 1000, bonus: { express: 5 }, bonusText: '表达 +5' },
-  { id: 'teacher', name: '教师资格证', difficulty: 1500, bonus: { skill: 5 }, bonusText: '专业 +5' },
-  { id: 'soft', name: '软考中级（软件设计师）', difficulty: 2500, bonus: { skill: 10 }, bonusText: '专业 +10' },
-  { id: 'law', name: '法律职业资格证（法考）', difficulty: 6000, bonus: { skill: 10, influence: 5 }, bonusText: '专业 +10，影响力 +5' },
-  { id: 'cpa', name: '注册会计师（全科）', difficulty: 10000, bonus: { skill: 10, money: 5 }, bonusText: '专业 +10，钱 +5 万' },
+  { id: 'cet4', name: '大学英语四级', difficulty: 250, bonus: { express: 5 }, bonusText: '表达 +5', desc: '成绩不设官方及格线（425 分只是报六级的门槛）。' },
+  { id: 'cet6', name: '大学英语六级', difficulty: 500, bonus: { express: 5 }, bonusText: '表达 +5', requires: { cert: 'cet4' }, desc: '报六级须四级 ≥425（报名门槛，不是及格线）。' },
+  { id: 'teacher', name: '教师资格证', difficulty: 750, bonus: { skill: 5 }, bonusText: '专业 +5', requires: { minTurn: 3 }, desc: '面试=结构化+试讲+答辩；笔试单科 2 年有效，面试合格证明 3 年；在校三年级以上可报。' },
+  { id: 'soft', name: '软考中级（软件设计师）', difficulty: 1000, bonus: { skill: 10 }, bonusText: '专业 +10', desc: '中级 15 个专业之一，每年两次，无学历资历条件，证书全国有效。' },
+  { id: 'law', name: '法律职业资格证（法考）', bonus: { skill: 10, influence: 5 }, bonusText: '专业 +10，影响力 +5', requiresMajor: '法学',
+    stages: [
+      { id: 'law-obj', name: '客观题', difficulty: 1000, validityTurns: 1 },
+      { id: 'law-subj', name: '主观题', difficulty: 500, requires: 'law-obj' },
+    ],
+    desc: '客观题 2 卷 300 分、180 合格；主观题 180 分、108 合格；客观题成绩本年度及下一考试年度有效。' },
+  { id: 'doctor', name: '医师资格证（执业医师）', bonus: { skill: 10 }, bonusText: '专业 +10（临床执业资格：可持证上岗行医）', requiresMajor: '临床医学', requires: { minTurn: 7 },
+    stages: [
+      { id: 'doctor-skill', name: '实践技能', difficulty: 500, validityTurns: 1 },
+      { id: 'doctor-exam', name: '医学综合', difficulty: 1000, requires: 'doctor-skill' },
+    ],
+    desc: '实践技能 60/100，医学综合 360/600；技能合格 2 年有效；一年两试试点。' },
+  { id: 'cpa', name: '注册会计师（全科）', difficulty: 2000, bonus: { skill: 10, money: 5 }, bonusText: '专业 +10，钱 +5 万', desc: '六科：会计/审计/财管/战略/经济法/税法；一年可报 1–6 科；每科 60 分合格；单科成绩 5 年内有效；无专业限制。' },
 ];
 
 // Generic yearly events (fast-forward years). Each has a small choice.
@@ -387,6 +408,7 @@ const GAOKAO_REGIONS = {
     id: 'shandong', name: '山东', year: 2026,
     model: '3+3', total: 750,
     line1: 442, specialLine: 525, line2: 150,
+    specialCancelled: true, // v1.4.3（§9.15）：特殊类型批 2026 年起取消，线值保留只作历史参考，不再当作在招批次展示
     batchName: '常规批', batchChoices: 96, batchUnit: '“专业+学校”平行志愿',
     note: '普通类分提前批+常规批；2026年起取消特殊类型批；常规批3次填报，每次最多96个“专业+学校”平行志愿；一段线按本科计划1:1.2划定。',
   },
@@ -418,11 +440,13 @@ const GAOKAO_REGIONS = {
 };
 const GAOKAO_DEFAULT_REGION = 'shandong';
 // Major reference lines: offset above 一段线. Game simplification, NOT
-// real admission data. 艺术设计 sits on 一段线 so a player above the
-// line always has at least one reachable major (the 调剂 floor).
+// real admission data. 艺术设计 v1.4.3（§9.16）修正为 −111：艺术类
+// 本科文化线是 331（一段线 442 的 75%），不是一段线本身；旧值 0
+// 把艺术设计当成一段线，约高 111 分。艺术设计仍是调剂 floor
+// （331 < 442，一段线上的玩家总有可达专业）。
 const MAJOR_LINE_OFFSETS = {
   '临床医学': 160, '计算机': 140, '金融': 120, '法学': 110, '会计': 90,
-  '新闻传播': 70, '师范': 70, '土木': 50, '英语': 50, '艺术设计': 0,
+  '新闻传播': 70, '师范': 70, '土木': 50, '英语': 50, '艺术设计': -111,
 };
 const MAJOR_LINE_DEFAULT_OFFSET = 60;
 // v0.5.1 (Allen 2026-11-17): the ad boost is gone. Two experts agreed it
@@ -444,21 +468,45 @@ const T5_JOBS = [
   // 裁员线，走各自的 T9 危机分支（见 T9_SLICE.branchSecond）。
   { id: 'freelance', name: '自由职业', desc: '自己接单，收入不稳但自由。', money: 8, stress: 3, industry: '自由职业' },
   { id: 'grad', name: '读研', desc: '继续读书，毕业晚三年，T9 走论文/毕业危机。', money: 0, stress: 2, industry: '在读' },
+  // v1.4.3：出国留学——学费+生活费 20 万，家人付或贷款；晚一年入职，
+  // T7 回来再选工作（B 卡 T7 签）。money 0：入职奖励在回国选工作时发。
+  { id: 'abroad', name: '出国留学', desc: '去国外读一年书：学费+生活费 20 万，家人付或贷款。晚一年入职。', money: 0, stress: 0, industry: '出国留学' },
 ];
+
+// v1.4.3：出国留学费用（GAME_BALANCE）：学费+生活费共 20 万。
+// 家人付：现金 −20；贷款：Debt +2（Debt 是 0–5 抽象档，见 engine.js）。
+const ABROAD_COST = 20;
+
+// 专业类别（报告 §5）：国考/省考职位表按专业类限岗，游戏内只做
+// 法检岗一处硬性限岗。'师范'是方向不是专业名，按报告 §5 记为 education。
+const MAJOR_CATS = { '计算机': 'computer', '临床医学': 'clinical', '法学': 'law', '金融': 'finance', '会计': 'accounting', '新闻传播': 'journalism', '土木': 'civil', '英语': 'english', '艺术设计': 'art', '师范': 'education' };
+const MAJOR_CAT_NAMES = { computer: '计算机类', clinical: '临床医学类', law: '法学类', finance: '金融类', accounting: '会计类', journalism: '新闻传播类', civil: '土木类', english: '英语类', art: '艺术设计类', education: '师范类' };
 
 // v1.4.2 (Allen 2026-11-21 16:06 补充 A)：体制内入职考试。
 // 国考 / 省考 → 省份（省考）→ 职位 → 报名 → 笔试 → 面试，
-// 通过才入职（sector='public'）。笔试看专业（skill），面试看表达
-// （express），阈值是准备门槛、不是掷骰：低于阈值一定落榜，高于
-// 阈值一定通过。省份修正只加在笔试上（竞争激烈程度），面试不加。
-// 数值是 GAME_BALANCE：基层岗 + 低竞争省在基础属性（专业 20 /
-// 表达 20）下就能通过，考试永远不会把玩家锁死；热门岗 + 国考 +
-// 山东要专业 40 / 表达 24，得在 T2–T4 实打实投入学习才够得着。
+// 通过才入职（sector='public'）。笔试（行测+申论）以综合能力
+// 判定——游戏内以专业数值简化，真实笔试不直接考专业知识；面试
+// 看表达与综合素质（综合分析、计划组织、应急应变、人际沟通、
+// 言语表达、岗位匹配），游戏内以表达数值简化。
+// v1.4.3（§9.7–9.12 校准）：确定性阈值改成排名制——过线只拿到
+// 进面资格，1:3 排名进面（笔试分高低定；游戏内：分差 ≥5 稳进，
+// 分差 <5 时国考 50% / 省考 70% 进——GAME_BALANCE，国考更卷）；
+// 进面≠录用：面试后还有体检、考察、公示（游戏内一关，90% 通过，
+// GAME_BALANCE）与 1 年试用期。报名流程补齐：资格审查→报名确认
+// 缴费→准考证打印→笔试→成绩/划线→资格复审→面试→体检→考察→
+// 公示→试用期 1 年（确认屏展示）。不花 AP（T5 本身没有 AP 经济）；
+// 成本是准备本身——笔试看专业、面试看表达，低于阈值一定落榜。
+// 落榜可改报其他职位、换考试类型，或放弃考公回 T5 选别的工作。
 const CIVIL_EXAM = {
   types: [
-    { id: 'national', name: '国考', desc: '全国统一招录，竞争最激烈，笔试门槛 +5。', writtenMod: 5 },
+    { id: 'national', name: '国考', desc: '全国统一招录，竞争最激烈，1:3 排名进面更难。', writtenMod: 0 },
     { id: 'provincial', name: '省考', desc: '分省招录，各省竞争程度不同。', writtenMod: 0 },
   ],
+  // 综合成绩权重（§9.10，已核实）：国考 5:5、山东 4:6、吉林 6:4、
+  // 辽宁 5:5、黑龙江 5:5。综合成绩 = 笔试分×权重 + 面试分×权重，
+  // 算出并展示在考上屏；录用判定用体检/考察/公示（0.9），不另设
+  // 综合线——游戏不建 1:1.2 排名池，见设计文档。
+  weights: { national: [5, 5], shandong: [4, 6], liaoning: [5, 5], jilin: [6, 4], heilongjiang: [5, 5] },
   // 省份修正（笔试）：山东最卷 +5，辽宁 0，吉林 / 黑龙江 −5。
   // 省份取游戏已有的 GAOKAO_REGIONS 四省，不另建名单。
   provinces: [
@@ -471,6 +519,10 @@ const CIVIL_EXAM = {
     { id: 'hot', name: '热门岗（部委 / 省直）', writtenMin: 35, interviewMin: 24, desc: '竞争最激烈，待遇和发展都好一档。' },
     { id: 'normal', name: '普通岗', writtenMin: 30, interviewMin: 22, desc: '常规岗位，稳稳当当。' },
     { id: 'grassroots', name: '基层岗', writtenMin: 25, interviewMin: 20, desc: '乡镇街道一线，门槛最低，最容易进。' },
+    // v1.4.3（§9.20）：法检岗是硬性限岗示例——只限法学类专业。
+    // 热门/普通/基层三岗为通用抽象，不设专业门槛（真实职位表按
+    // 专业类限岗，游戏未建全量职位表，见设计文档）。
+    { id: 'legal', name: '法检岗（法院 / 检察院）', writtenMin: 30, interviewMin: 22, cats: ['law'], desc: '只限法学类专业。' },
   ],
 };
 
@@ -491,9 +543,10 @@ const SECTORS = [
   { id: 'manufacturing', name: '制造业', subsectors: [] },
   { id: 'healthcare', name: '医疗健康', subsectors: [] },
   { id: 'public', name: '体制内 / 公共服务', subsectors: [] },
+  { id: 'web3', name: 'Web3 / 数字资产', subsectors: [] },
   { id: 'other', name: '其他', subsectors: [] },
 ];
-const SECTOR_DISPLAY = { internet: '互联网', education: '教培', offline: '线下服务', finance: '金融', manufacturing: '制造业', healthcare: '医疗健康', public: '体制内', other: '其他' };
+const SECTOR_DISPLAY = { internet: '互联网', education: '教培', offline: '线下服务', finance: '金融', manufacturing: '制造业', healthcare: '医疗健康', public: '体制内', web3: 'Web3 / 数字资产', other: '其他' };
 
 // ---- v1.2 (P1-1): NPC ----
 // 结构：id / name / role / backgroundTags / values / traits。
@@ -649,8 +702,57 @@ const T9_SLICE = {
       ],
     },
   },
+  // v1.4.3：体制内第三件事不再沿用大厂的 borrow-home（“空窗期至少
+  // 三个月”文案只属于裁员线）。体制内是借调去外地三个月，家里怎么办。
+  branchThird: {
+    public: {
+      id: 'transfer-home', title: '第三件事：借调去外地，家里的事怎么办？',
+      body: '上级部门想借调你去外地帮三个月。去，能露脸、学东西，但家里这一摊就顾不上了；不去，守住现在，但借调的名额就给了别人。',
+      options: [
+        { text: '带着伴侣/家人一起去', fx: { money: -1, family: 1, stress: 2 }, seal: '你决定带着家人一起去外地三个月。安顿下来花了 1 万，但家里没散。', omen: '出发那天，家人在车站送你。' },
+        { text: '自己去异地三个月', fx: { family: -1, stress: 5 }, seal: '你一个人去了外地。三个月里家里的事只能电话里说，家庭线 −1。', omen: '第一个月过去，你开始想家。' },
+        { text: '推掉借调，守住现在', fx: { stress: -2 }, seal: '你推掉了借调。名额给了隔壁科的人，你留在原岗位，睡了个安稳觉。', omen: '借调名单公布那天，你的名字不在上面。' },
+      ],
+    },
+  },
 };
 
+// v1.4.3（Allen 2026-11-21 17:11 定方案 B）：退休年龄。
+// 口径：全国人大常委会《关于实施渐进式延迟法定退休年龄的决定》
+// （2024-09-13 通过，2025-01-01 起实施），15 年过渡期（2025–2039）：
+// 男 60→63、女干部/管理技术岗 55→58、女工人/生产操作岗 50→55；
+// 男与原 55 女每 4 个月 +1 个月，原 50 女每 2 个月 +1 个月；弹性退休
+// 最多提前/推迟 3 年（本游戏不建弹性选择）；最低缴费年限 15→20 年
+// （2030 年起，本游戏不建模）。游戏内出生年份 1992–2004 与 2008
+// 全部在过渡期结束后退休，取顶格：男 63、女干部 58、女工人 55。
+// step：每多少个月 +1 个月延迟；maxDelayMonths：最多延迟月数。
+const RETIREMENT_CATEGORIES = [
+  { id: 'male', name: '男职工', baseYears: 60, step: 4, maxDelayMonths: 36, finalYears: 63, desc: '原法定 60 岁，每 4 个月延迟 1 个月，顶格 63 岁。' },
+  { id: 'female-cadre', name: '女职工（管理/技术岗）', baseYears: 55, step: 4, maxDelayMonths: 36, finalYears: 58, desc: '原法定 55 岁，每 4 个月延迟 1 个月，顶格 58 岁。' },
+  { id: 'female-worker', name: '女职工（生产操作岗）', baseYears: 50, step: 2, maxDelayMonths: 60, finalYears: 55, desc: '原法定 50 岁，每 2 个月延迟 1 个月，顶格 55 岁。' },
+];
+// 退休后的事（GAME_BALANCE）：36 岁到退休年龄是压缩的尾声，不是
+// 一年一年过的回合；选最多 2 项，各结算一次小额属性变化。
+const RETIREMENT_ACTIVITIES = [
+  { id: 'rehired', name: '返聘', desc: '回原单位或同行带新人。', fx: { money: 2, skill: 2 } },
+  { id: 'grandkids', name: '带孙辈 / 帮衬子女', desc: '家里多了一代人。', fx: { family: 2, stress: -5 } },
+  { id: 'travel', name: '旅行', desc: '去一直想去的地方。', fx: { money: -2, stress: -8, health: 2 } },
+  { id: 'venture', name: '创业 / 小生意', desc: '开个小店试试。', fx: { money: 3, stress: 5 } },
+  { id: 'volunteer', name: '志愿者', desc: '去社区帮忙。', fx: { influence: 5, stress: -3 } },
+  { id: 'learn', name: '学习 / 考证', desc: '活到老学到老。', fx: { skill: 5, express: 2 } },
+  { id: 'idle', name: '什么都不做', desc: '歇着。', fx: { stress: -10 } },
+];
+
+// v1.4.3：隐藏剧情——新信息渠道。外网（能登陆外网）是第一个。
+// 开局即有：家庭从事外贸/制造（bg.trading，era.js rollFamilyBg）或
+// 经济档 E3/E4（“层次高”）；普通家庭须攒 3 条“意外”线索（每年
+// 15% 随机听到 + 第一次开源活动给 1 条），或在文字尝试里写出可行
+// 的办法（条件见 game.js attemptHiddenUnlock）。不是所有点子都给
+// 达成：要看条件与可行性。
+const HIDDEN_PLOTS = [
+  { id: 'internet', name: '能登陆外网', desc: '解锁后，年屏多一条信息渠道：外网。', cluesNeeded: 3 },
+];
+
 if (typeof module !== 'undefined') {
-  module.exports = { DIFFICULTIES, OBSESSIONS, FAMILIES, TAG_KEYWORDS, ACTIONS, CERTS, CERT_HOURS_PER_AP, YEAR_EVENTS, T1_MAJORS, GAOKAO_REGIONS, GAOKAO_DEFAULT_REGION, MAJOR_LINE_OFFSETS, MAJOR_LINE_DEFAULT_OFFSET, T5_JOBS, CIVIL_EXAM, T9_SLICE, VENTURE_ARCHETYPES, THEME_KEYWORDS, NPCS, SECTORS, SECTOR_DISPLAY, EN_INTERVIEW_QUESTIONS };
+  module.exports = { DIFFICULTIES, OBSESSIONS, FAMILIES, TAG_KEYWORDS, ACTIONS, CERTS, CERT_HOURS_PER_AP, YEAR_EVENTS, T1_MAJORS, GAOKAO_REGIONS, GAOKAO_DEFAULT_REGION, MAJOR_LINE_OFFSETS, MAJOR_LINE_DEFAULT_OFFSET, T5_JOBS, ABROAD_COST, MAJOR_CATS, MAJOR_CAT_NAMES, CIVIL_EXAM, T9_SLICE, VENTURE_ARCHETYPES, THEME_KEYWORDS, NPCS, SECTORS, SECTOR_DISPLAY, EN_INTERVIEW_QUESTIONS, RETIREMENT_CATEGORIES, RETIREMENT_ACTIVITIES, HIDDEN_PLOTS };
 }

@@ -52,7 +52,7 @@ const sandbox = {
   })(),
 };
 vm.createContext(sandbox);
-for (const f of ['rng.js', 'data.js', 'gaokao-lines.js', 'era-events.js', 'era.js', 'engine.js', 'ai-review.js', 'analytics.js', 'game.js']) {
+for (const f of ['rng.js', 'data.js', 'interpersonal.js', 'stocks.js', 'gaokao-lines.js', 'era-events.js', 'era.js', 'engine.js', 'ai-review.js', 'analytics.js', 'game.js']) {
   vm.runInContext(fs.readFileSync(path.join(REPO, 'js', f), 'utf8'), sandbox, { filename: f });
 }
 const ctx = (code) => vm.runInContext(code, sandbox);
@@ -91,13 +91,13 @@ function freshState(era) {
   check('ERA-03 辽宁 2019 理 本科 369 (359 discarded)', L['liaoning|2019|理'].tier2 === 369);
   check('ERA-03 黑龙江 2011 文 一本 540 / 二本 462', L['heilongjiang|2011|文'].tier1 === 540 && L['heilongjiang|2011|文'].tier2 === 462);
   check('ERA-03 吉林 2018 理 533/405/283', L['jilin|2018|理'].tier1 === 533 && L['jilin|2018|理'].tier2 === 405 && L['jilin|2018|理'].tier3 === 283);
-  check('ERA-03 generated counts match the CSV (308 / 108 / 0 / 200)', ctx('GAOKAO_LINES_META').rows === 308 && ctx('GAOKAO_LINES_META').verified === 108 && ctx('GAOKAO_LINES_META').toVerify === 0 && ctx('GAOKAO_LINES_META').unprovided === 200);
+  check('ERA-03 generated counts match the CSV (305 / 108 / 21 / 176)', ctx('GAOKAO_LINES_META').rows === 305 && ctx('GAOKAO_LINES_META').verified === 108 && ctx('GAOKAO_LINES_META').toVerify === 21 && ctx('GAOKAO_LINES_META').unprovided === 176);
 }
 
 // ---------- ERA-04/05: states and playable years ----------
 {
   check('ERA-04 2026 rows are now verified and playable (no to_verify left)', ctx(`isLinePlayable(lookupLine('liaoning', 2026, '物理'))`) === true && ctx(`lookupLine('liaoning', 2026, '物理').status`) === '已核实' && ctx(`lookupLine('liaoning', 2026, '物理').tier2`) === 344);
-  check('ERA-04 unprovided rows are NOT playable', ctx(`isLinePlayable(lookupLine('shandong', 2009, '文'))`) === false && ctx(`lookupLine('shandong', 2023, '理').status`) === '未提供');
+  check('ERA-04 unprovided rows are NOT playable', ctx(`isLinePlayable(lookupLine('shandong', 2009, '文'))`) === false && ctx(`lookupLine('shandong', 2023, '不分').status`) === '待核实');
   check('ERA-04 verified rows ARE playable', ctx(`isLinePlayable(lookupLine('shandong', 2015, '文'))`) === true);
   const py = ctx('playableBirthYears()');
   const expected = [...Array(13)].map((_, i) => 1992 + i).concat([2008]);
@@ -209,7 +209,7 @@ check('ERA-10 fallback choice recorded, flow enters T2', ctx('G.state.flags.fall
   check('ERA-15 2026 resolved to the v0.5 numbers (ChatGPT second version wrong)', L['liaoning|2026|物理'].tier2 === 344 && L['jilin|2026|物理'].tier2 === 321 && L['heilongjiang|2026|物理'].tier2 === 340 && L['shandong|2026|不分'].tier2 === 442);
   check('ERA-15 2026 历史类 rows exist (辽宁 442 / 吉林 343 / 黑龙江 385)', L['liaoning|2026|历史'].tier2 === 442 && L['jilin|2026|历史'].tier2 === 343 && L['heilongjiang|2026|历史'].tier2 === 385);
   check('ERA-15 黑龙江 2026 专科是 150（公告原文，非 160）', L['heilongjiang|2026|物理'].vocational === 150 && L['heilongjiang|2026|历史'].vocational === 150);
-  check('ERA-15 no to_verify rows remain', Object.values(L).every((r) => r.status !== '待核实'));
+  check('ERA-15 no to_verify rows remain for 2026 (2023-2025 fills are 待核实)', Object.values(L).filter((r) => r.year === 2026).every((r) => r.status !== '待核实') && Object.values(L).filter((r) => r.status === '待核实').length === 21);
   check('ERA-15 吉林 2019 regime stays split (一本/二本分开，合并的是二本+三本）', L['jilin|2019|文'].regime === 'split' && L['jilin|2019|文'].note.includes('二三本合并后口径'));
   check('ERA-15 2008 birth year is now playable, 2005-2007 still locked', ctx('playableBirthYears()').includes(2008) && !ctx('playableBirthYears()').includes(2006));
 }
