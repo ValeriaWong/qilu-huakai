@@ -145,13 +145,16 @@ const lastEvent = (name) => events(name)[events(name).length - 1];
     events('commitment').length === 1
     && lastEvent('commitment').body.data.card === 'A'
     && lastEvent('commitment').body.data.choice === 'obey');
-  ctx(`pickT5('stable')`);
+  ctx(`pickT5('bigtech')`);
   // v1.2 (P1-3): T5 是两段签署——pickT5 只起草，选行业后才签署 B。
-  ctx(`pickT5Sector('public')`);
+  // v1.4.2: 体制内改走入职考试（pickT5('stable') 进考试流程，不再
+  // 直接起草），两段签署的回归改用大厂覆盖；stable 考试流程见
+  // test-v18.js。
+  ctx(`pickT5Sector('internet')`);
   check('ANALYTICS-15 commitment B fires with job id',
     events('commitment').length === 2
     && lastEvent('commitment').body.data.card === 'B'
-    && lastEvent('commitment').body.data.choice === 'stable');
+    && lastEvent('commitment').body.data.choice === 'bigtech');
 
   // ---------- integration: venture start + year-end ----------
   freshState(50);

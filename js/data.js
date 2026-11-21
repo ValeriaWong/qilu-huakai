@@ -171,6 +171,28 @@ const ACTIONS = [
   { id: 'rest',     name: '躺平（刷手机）', ap: 1, stress: -5, desc: '无收益。就是喘口气，不产生下一年效果。', fx: {} },
 ];
 
+// v1.4.2 (Allen 2026-11-21 16:06 补充 B)：考证系统。
+// Allen 的模型：成功看三项——考试难度、你的天赋、付出的时间；
+// 10000 小时后必过；天赋是时间乘数。实现口径（对 Allen 原话的
+// 解读，如他纠正再改）：有效小时 = 投入小时 × 天赋乘数；每种证书
+// 有难度（以所需有效小时计）；有效小时 ≥ 难度即通过；最难证书
+// 难度 10000，所以 10000 有效小时必过任何考试。天赋乘数 = 专业
+// 系数 k（开局封存，0.65–1.3；study 行动已用同一乘数，见
+// applyAction），不另建天赋 stat。1 AP 考证学习 = 500 投入小时：
+// 以 k=1 计，四级 1 AP、六级 2 AP、教资 3 AP、软考 5 AP、法考
+// 12 AP、注会 20 AP——注会是整局的追求，不是大学四年的事。
+// 证书按游戏内专业挑：计算机→软考，法学→法考，会计/金融→注会，
+// 师范→教资，英语/通用→四六级（T1_MAJORS 有这 10 个专业）。
+const CERT_HOURS_PER_AP = 500;
+const CERTS = [
+  { id: 'cet4', name: '大学英语四级', difficulty: 500, bonus: { express: 5 }, bonusText: '表达 +5' },
+  { id: 'cet6', name: '大学英语六级', difficulty: 1000, bonus: { express: 5 }, bonusText: '表达 +5' },
+  { id: 'teacher', name: '教师资格证', difficulty: 1500, bonus: { skill: 5 }, bonusText: '专业 +5' },
+  { id: 'soft', name: '软考中级（软件设计师）', difficulty: 2500, bonus: { skill: 10 }, bonusText: '专业 +10' },
+  { id: 'law', name: '法律职业资格证（法考）', difficulty: 6000, bonus: { skill: 10, influence: 5 }, bonusText: '专业 +10，影响力 +5' },
+  { id: 'cpa', name: '注册会计师（全科）', difficulty: 10000, bonus: { skill: 10, money: 5 }, bonusText: '专业 +10，钱 +5 万' },
+];
+
 // Generic yearly events (fast-forward years). Each has a small choice.
 // Gates (ChatGPT audit 2026-11-16, v0.2): an event must pass THREE checks,
 // not just age — minTurn/maxTurn, plus `requires` (student / employment /
@@ -236,6 +258,22 @@ const YEAR_EVENTS = [
     { text: '暂时顾不上，先稳住自己', fx: { family: -1, stress: 2 }, omen: '电话那头沉默了几秒，说“你先忙”。' },
   ]},
   { id: 'ev-idea', input: true, title: '你有个赚钱的点子', body: '写下来，系统会按你的想法生成一条专属的线：启动成本、里程碑、风险与回报。做起来要时间、要钱、要人——但这条线是你自己的。', placeholder: '比如：我想创业做一个 AI 求职助手，帮人改简历、模拟面试。' },
+  // v1.4.2 (Allen 2026-11-21 16:10)：体制内选择事件（requires.public）。
+  // 站队已在 T6（对所有在职玩家），这里不重复建；补收礼 / 帮人办事 /
+  // 借调三个，都有代价、有后果，不是纯 flavor。minTurn 6：体制内
+  // 从 T6 才存在。
+  { id: 'ev-gift', minTurn: 6, requires: { public: true }, title: '有人给你送了东西', body: '一位来办事的群众临走时留下一个袋子，说是“一点土特产”。袋子有点沉。', options: [
+    { text: '收下', fx: { money: 2, influence: -3, stress: 5 }, omen: '袋子里的东西，你晚上才敢打开看。' },
+    { text: '退回去', fx: { influence: 3, stress: -2 }, omen: '对方愣了一下，说“那下次再来”。' },
+  ]},
+  { id: 'ev-favor', minTurn: 6, requires: { public: true }, title: '亲戚找你帮忙办事', body: '一位远房亲戚找上门，想让你帮他孩子进你们单位下属的一个岗位。你手里没有这个权力，但“帮着问问”似乎也不难。', options: [
+    { text: '帮着问问', fx: { network: 4, stress: 6, money: -1 }, omen: '你打了几个电话，事情没成，人情欠下了。' },
+    { text: '推掉', fx: { network: -3, family: -1, stress: -2 }, omen: '亲戚走的时候，脸色不太好看。' },
+  ]},
+  { id: 'ev-secondment', minTurn: 6, requires: { public: true }, title: '上级部门要借调你', body: '上级部门缺人手，想借调你去帮三个月。借调能露脸，但本职工作会落下，考核也可能受影响。', options: [
+    { text: '去', fx: { influence: 5, skill: 2, stress: 8 }, omen: '借调的第一个月，你天天加班到九点。' },
+    { text: '不去', fx: { stress: -2 }, omen: '名额给了隔壁科的小王。' },
+  ]},
 ];
 
 // 赚钱点子的专属线：自由输入 → 关键词分类 → 一条可经营的项目线。
@@ -399,7 +437,7 @@ const MAJOR_LINE_DEFAULT_OFFSET = 60;
 const T1_MAJORS = ['计算机', '临床医学', '法学', '金融', '会计', '新闻传播', '土木', '英语', '艺术设计', '师范'];
 const T5_JOBS = [
   { id: 'bigtech', name: '大厂', desc: '钱高，压力 +8/年。', money: 18, stress: 8, industry: '互联网' },
-  { id: 'stable',  name: '体制内', desc: '稳，但影响力上限 40。', money: 9, stress: 2, industry: '体制内' },
+  { id: 'stable',  name: '体制内', desc: '稳，但影响力上限 40。须通过国考 / 省考入职。', money: 9, stress: 2, industry: '体制内' },
   { id: 'hometown',name: '回老家', desc: '家庭线 +2，事业慢。', money: 7, stress: 1, industry: '本地服务' },
   { id: 'startup', name: '创业公司', desc: '专业成长 ×1.5，但 3 年内倒闭率 35%。', money: 11, stress: 6, industry: '创业公司' },
   // v1.2 (P0-7): 自由职业与读研进入 T5——没有雇佣关系的人不走 H2
@@ -407,6 +445,34 @@ const T5_JOBS = [
   { id: 'freelance', name: '自由职业', desc: '自己接单，收入不稳但自由。', money: 8, stress: 3, industry: '自由职业' },
   { id: 'grad', name: '读研', desc: '继续读书，毕业晚三年，T9 走论文/毕业危机。', money: 0, stress: 2, industry: '在读' },
 ];
+
+// v1.4.2 (Allen 2026-11-21 16:06 补充 A)：体制内入职考试。
+// 国考 / 省考 → 省份（省考）→ 职位 → 报名 → 笔试 → 面试，
+// 通过才入职（sector='public'）。笔试看专业（skill），面试看表达
+// （express），阈值是准备门槛、不是掷骰：低于阈值一定落榜，高于
+// 阈值一定通过。省份修正只加在笔试上（竞争激烈程度），面试不加。
+// 数值是 GAME_BALANCE：基层岗 + 低竞争省在基础属性（专业 20 /
+// 表达 20）下就能通过，考试永远不会把玩家锁死；热门岗 + 国考 +
+// 山东要专业 40 / 表达 24，得在 T2–T4 实打实投入学习才够得着。
+const CIVIL_EXAM = {
+  types: [
+    { id: 'national', name: '国考', desc: '全国统一招录，竞争最激烈，笔试门槛 +5。', writtenMod: 5 },
+    { id: 'provincial', name: '省考', desc: '分省招录，各省竞争程度不同。', writtenMod: 0 },
+  ],
+  // 省份修正（笔试）：山东最卷 +5，辽宁 0，吉林 / 黑龙江 −5。
+  // 省份取游戏已有的 GAOKAO_REGIONS 四省，不另建名单。
+  provinces: [
+    { id: 'shandong', name: '山东', writtenMod: 5 },
+    { id: 'liaoning', name: '辽宁', writtenMod: 0 },
+    { id: 'jilin', name: '吉林', writtenMod: -5 },
+    { id: 'heilongjiang', name: '黑龙江', writtenMod: -5 },
+  ],
+  positions: [
+    { id: 'hot', name: '热门岗（部委 / 省直）', writtenMin: 35, interviewMin: 24, desc: '竞争最激烈，待遇和发展都好一档。' },
+    { id: 'normal', name: '普通岗', writtenMin: 30, interviewMin: 22, desc: '常规岗位，稳稳当当。' },
+    { id: 'grassroots', name: '基层岗', writtenMin: 25, interviewMin: 20, desc: '乡镇街道一线，门槛最低，最容易进。' },
+  ],
+};
 
 // ---- v1.2 (P1-3): 行业分类 ----
 // employerType（公司性质，T5_JOBS 的 id）与 sector（行业）分开；
@@ -500,6 +566,7 @@ const T9_SLICE = {
     startup: '26 岁，周二晚上 21:47。账上的钱只够烧三个月，投资人的电话一直没打通。今晚要决定三件事。',
     grad: '26 岁，周二晚上 21:47。论文卡住了，导师的邮件躺在收件箱里，毕业答辩还有三个月。今晚要决定三件事。',
     freelance: '26 岁，周二晚上 21:47。最大的客户刚发来消息：下个季度的单子要停了。今晚要决定三件事。',
+    public: '26 岁，周二晚上 21:47。单位里传着机构改革的消息，有人说要轮岗，有人说要借调，考核的风声也比往年紧。今晚要决定三件事。',
   },
   branchFirst: {
     startup: {
@@ -527,6 +594,17 @@ const T9_SLICE = {
         { text: '打电话给老客户', fx: { network: 2, stress: -3 }, seal: '你拨通了老客户的电话。他接了，第一句话是：“我听说了。”', omen: '老客户在电话那头停顿了两秒。' },
         { text: '在同行群里问问', fx: { network: 1 }, seal: '你在同行群里发了一句：“最近有单子吗？”有人回了一个“最近都难”。', omen: '群里发出去的消息，半天没人接话。' },
         { text: '先整理作品集', fx: { skill: 1, stress: 2 }, seal: '你打开电脑，把作品集和这三年的项目清单重新整理了一遍。', omen: '你翻到一张旧合同，是第一单留下的。' },
+      ],
+    },
+    // v1.4.2：体制内分支。第一件事是找老前辈聊聊（不是 HR 谈话），
+    // 文案里不出现裁员 / 解雇 / 补偿 / 劳动合同法。
+    public: {
+      id: 'call-senior', title: '第一件事：今晚找谁聊聊？',
+      body: '单位里一位老前辈带过你，他经历过上一次机构改革。你想问问他，这次的风声到底有多大。',
+      options: [
+        { text: '打电话给老前辈', fx: { network: 2, stress: -3 }, seal: '你拨通了老前辈的电话。他接了，第一句话是：“我听说了，考核要动真格。”', omen: '老前辈在电话那头停顿了两秒。' },
+        { text: '先在单位群里探探口风', fx: { network: 1 }, seal: '你在群里发了一句：“听说要轮岗了？”有人回了一个“先别传”。', omen: '群里发出去的消息，半天没人接话。' },
+        { text: '先把自己的考核材料整理一遍', fx: { skill: 1, stress: 2 }, seal: '你打开电脑，把这三年的考核材料和工作台账重新整理了一遍。', omen: '你翻到一张旧工牌，照片上的你比现在瘦一点。' },
       ],
     },
   },
@@ -558,9 +636,21 @@ const T9_SLICE = {
         { text: '先找新客户', fx: { stress: 5 }, seal: '你决定不纠缠：先把手头的作品集发出去，找新客户。', omen: '老客户回了一句，说“以后有单子再找你”。' },
       ],
     },
+    // v1.4.2：体制内分支。第二件事是考核与轮岗（id 不是 hr-talk，
+    // 不触发 t9Branch 的转岗判定）。文案里不出现裁员 / 解雇 / 补偿 /
+    // 劳动合同法；你的编制还在，考核与轮岗才是这一夜的主题。
+    public: {
+      id: 'review-response', title: '第二件事：考核与轮岗，你怎么应对？',
+      body: '今年的考核比往年严，末位要轮岗，也有人要借调去上级部门帮一阵子。你的编制还在，考核与轮岗才是这一夜的主题——去哪、跟谁，都要你自己选。',
+      options: [
+        { text: '主动申请借调', fx: { stress: 5 }, seal: '你决定主动申请借调：去上级部门帮一阵子，露脸也学东西。', omen: '你把借调申请表从抽屉里翻了出来。' },
+        { text: '争取留在原岗位', fx: { stress: 10 }, seal: '你决定争取留在原岗位。但轮岗名单怎么定，要谈了才知道。', omen: '你想起走廊尽头那个空了两个月的工位。' },
+        { text: '先把考核材料做扎实', fx: { stress: 5 }, seal: '你决定不纠结：先把能做的材料做扎实，再看。', omen: '科长回了一句，说“材料先备好再说”。' },
+      ],
+    },
   },
 };
 
 if (typeof module !== 'undefined') {
-  module.exports = { DIFFICULTIES, OBSESSIONS, FAMILIES, TAG_KEYWORDS, ACTIONS, YEAR_EVENTS, T1_MAJORS, GAOKAO_REGIONS, GAOKAO_DEFAULT_REGION, MAJOR_LINE_OFFSETS, MAJOR_LINE_DEFAULT_OFFSET, T5_JOBS, T9_SLICE, VENTURE_ARCHETYPES, THEME_KEYWORDS, NPCS, SECTORS, SECTOR_DISPLAY, EN_INTERVIEW_QUESTIONS };
+  module.exports = { DIFFICULTIES, OBSESSIONS, FAMILIES, TAG_KEYWORDS, ACTIONS, CERTS, CERT_HOURS_PER_AP, YEAR_EVENTS, T1_MAJORS, GAOKAO_REGIONS, GAOKAO_DEFAULT_REGION, MAJOR_LINE_OFFSETS, MAJOR_LINE_DEFAULT_OFFSET, T5_JOBS, CIVIL_EXAM, T9_SLICE, VENTURE_ARCHETYPES, THEME_KEYWORDS, NPCS, SECTORS, SECTOR_DISPLAY, EN_INTERVIEW_QUESTIONS };
 }

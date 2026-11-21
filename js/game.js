@@ -829,15 +829,27 @@ function attemptShengben(s, rng, costAp) {
 // 调剂过的玩家，大学期间（T2–T4）可转回想读的专业。1 AP，50% 成功，
 // 一年一次；失败压力 +10，明年可再试。成功后读回原想读的专业，
 // 调剂标记清除（满意度回正）；失败只加压力，不动专业。
+// v1.4.2 (Allen 2026-11-21 16:03 反馈 2)：转专业加学业优秀门槛——
+// 专业 ≥ 30 才可申请。专业是游戏里唯一的学业数值（blankAttrs 基础
+// 20；T2–T4 的学业投入主要是系统学习 +5×k，见 applyAction；
+// 加班 / 接私活 +2、事件与项目奖励也能加少量）。30 的算法：k≥1.0
+// 时 2 次系统学习到 30（20+5+5），专科 k=0.8 时 3 次，校外专科
+// k=0.65 时 4 次——门槛量的是专业水平，不是单纯的学习次数，所以
+// 加班与事件攒的专业也算；但不学习只靠加班/事件到 30 要 5+ AP 与
+// 大量压力，实践中仍须持续的学业投入。50% 掷骰保留（门槛通过后
+// 才掷），不改成功率数值——门槛本身终结了“纯 50%”的抱怨。
+const TRANSFER_MAJOR_MIN_SKILL = 30;
 function transferMajorEligible(s) {
-  return !!(s.flags.adjusted && s.turn >= 2 && s.turn <= 4);
+  return !!(s.flags.adjusted && s.turn >= 2 && s.turn <= 4 && (s.attrs.skill || 0) >= TRANSFER_MAJOR_MIN_SKILL);
 }
 function transferMajorHtml(s) {
-  if (!transferMajorEligible(s)) return '';
+  if (!s.flags.adjusted || s.turn < 2 || s.turn > 4) return '';
   const tried = s.flags.transferYear === s.turn;
   const last = s.flags.transferLast;
   const result = last && last.turn === s.turn ? `<p>${esc(last.text)}</p>` : '';
-  return `<div class="card"><h2>转专业</h2>${result}<button class="opt" data-act="transfer-major" ${s.ap < 1 || tried ? 'disabled' : ''}><b>转回${esc(s.flags.adjustedFrom || '想读的专业')}</b><span>1 AP，50% 成功。今年一次机会，成功后读回你想读的专业；失败压力 +10。${tried ? '（今年已试过）' : ''}</span></button></div>`;
+  const skill = s.attrs.skill || 0;
+  const gated = skill < TRANSFER_MAJOR_MIN_SKILL;
+  return `<div class="card"><h2>转专业</h2>${result}<button class="opt" data-act="transfer-major" ${s.ap < 1 || tried || gated ? 'disabled' : ''}><b>转回${esc(s.flags.adjustedFrom || '想读的专业')}</b><span>1 AP，50% 成功。今年一次机会，成功后读回你想读的专业；失败压力 +10。${tried ? '（今年已试过）' : ''}${gated ? `（须专业 ≥ ${TRANSFER_MAJOR_MIN_SKILL} 才可申请，你现在 ${skill}：多做系统学习攒专业。）` : ''}</span></button></div>`;
 }
 function attemptTransferMajor(s, rng) {
   if (!transferMajorEligible(s)) return false;
@@ -859,6 +871,302 @@ function attemptTransferMajor(s, rng) {
   s.rngState = rng.getState();
   autosave(ok ? '转专业成功' : '转专业未过');
   return true;
+}
+
+// ---------- v1.4.2：考证系统（补充 B）/ 体制内入职考试（补充 A）/
+// 体制内年度考核（补充 C，16:08）/ 官场诱惑与纪律风险（16:10） ----------
+
+// ---- 考证 ----
+// 天赋乘数 = 专业系数 k（开局封存，见 applyAction 的 study 行）。
+function certTalentK(s) { return (s.flags && s.flags.majorK) || 1; }
+function certHours(s, id) { return ((s.flags && s.flags.certHours) || {})[id] || 0; }
+function certPassed(s, id) { return ((s.flags && s.flags.certs) || []).indexOf(id) >= 0; }
+// 有效小时 = 投入小时 × 天赋乘数（Allen 模型，见 data.js CERTS 注释）。
+function certEffectiveHours(rawHours, k) { return Math.round(rawHours * (k || 1)); }
+function certStudy(s, id) {
+  if (!s || s.ap < 1) return false;
+  const c = CERTS.find((x) => x.id === id);
+  if (!c || certPassed(s, id)) return false;
+  s.ap -= 1;
+  s.flags.certHours = s.flags.certHours || {};
+  s.flags.certHours[id] = certHours(s, id) + certEffectiveHours(CERT_HOURS_PER_AP, certTalentK(s));
+  s.yearActions = s.yearActions || [];
+  s.yearActions.push('考证学习：' + c.name);
+  if (s.flags.certHours[id] >= c.difficulty) {
+    s.flags.certs = s.flags.certs || [];
+    s.flags.certs.push(id);
+    for (const [k, v] of Object.entries(c.bonus)) s.attrs[k] = (s.attrs[k] || 0) + v;
+    s.flags.certLast = { turn: s.turn, id, text: '考过了' + c.name + '：' + c.bonusText + '。' };
+  }
+  autosave('考证学习');
+  return true;
+}
+function certHtml(s) {
+  if (s.turn < 2 || s.turn === 9) return '';
+  const last = s.flags.certLast && s.flags.certLast.turn === s.turn ? `<p>${esc(s.flags.certLast.text)}</p>` : '';
+  const rows = CERTS.map((c) => {
+    const h = certHours(s, c.id);
+    const done = certPassed(s, c.id);
+    return `<button class="opt" data-act="cert-study" data-id="${c.id}" ${s.ap < 1 || done ? 'disabled' : ''}><b>${esc(c.name)}</b><span>${done ? '已考过：' + c.bonusText : '已投入 ' + h + ' / ' + c.difficulty + ' 有效小时（1 AP = ' + CERT_HOURS_PER_AP + ' 小时 × 天赋 ' + certTalentK(s) + '）。考过：' + c.bonusText}</span></button>`;
+  }).join('');
+  return `<div class="card"><h2>考证</h2>${last}<p class="muted">天赋乘数 ${certTalentK(s)}（= 专业系数 k，开局封存）。有效小时 = 投入小时 × 天赋；最难的证要 10000 有效小时。</p><div class="options">${rows}</div></div>`;
+}
+
+// ---- 体制内入职考试（补充 A） ----
+// pickT5('stable') 不再直接进选行业屏，改走考试流程：选国考 / 省考
+// → 选省份（省考）→ 选职位 → 报名 → 笔试 → 面试 → 通过入职
+// （signT5，sector='public'）。不花 AP（T5 本身没有 AP 经济）；
+// 成本是准备本身——笔试看专业、面试看表达，低于阈值一定落榜。
+// 落榜可改报其他职位、换考试类型，或放弃考公回 T5 选别的工作。
+function civilExamThresholds(d) {
+  const pos = CIVIL_EXAM.positions.find((x) => x.id === d.positionId) || CIVIL_EXAM.positions[2];
+  const type = CIVIL_EXAM.types.find((x) => x.id === d.type) || CIVIL_EXAM.types[1];
+  const prov = d.type === 'provincial' ? (CIVIL_EXAM.provinces.find((x) => x.id === d.provinceId) || CIVIL_EXAM.provinces[1]) : null;
+  return {
+    written: pos.writtenMin + type.writtenMod + (prov ? prov.writtenMod : 0),
+    interview: pos.interviewMin,
+  };
+}
+function civilExamTypeName(d) {
+  const t = CIVIL_EXAM.types.find((x) => x.id === d.type);
+  return t ? t.name : '';
+}
+function civilExamProvinceName(d) {
+  const p = CIVIL_EXAM.provinces.find((x) => x.id === d.provinceId);
+  return p ? p.name : '';
+}
+function civilExamPositionName(d) {
+  const pos = CIVIL_EXAM.positions.find((x) => x.id === d.positionId);
+  return pos ? pos.name : '';
+}
+function screenCivilExamType() {
+  const s = G.state;
+  setScreen(`
+    <h1>T5 · 22 岁 · 考公：先选考试</h1>
+    <p class="intro">进体制内要先考试：笔试看专业，面试看表达。落榜可以改报、可以换考试，也可以放弃回头选别的工作。</p>
+    <div class="options">${CIVIL_EXAM.types.map((t) => `<button class="opt" data-act="exam-type" data-id="${t.id}"><b>${t.name}</b><span>${t.desc}</span></button>`).join('')}</div>
+    <p class="muted">你现在的专业 ${s.attrs.skill}、表达 ${s.attrs.express}。职位页会写明每个岗位的门槛。</p>
+    <div class="actions"><button data-act="exam-quit">不考了，回 T5 选别的工作</button></div>`);
+}
+function pickCivilExamType(id) {
+  const t = CIVIL_EXAM.types.find((x) => x.id === id);
+  if (!t) return;
+  G.examDraft = { type: t.id, provinceId: null, positionId: null };
+  if (t.id === 'provincial') screenCivilExamProvince();
+  else screenCivilExamPosition();
+}
+function screenCivilExamProvince() {
+  setScreen(`
+    <h1>T5 · 22 岁 · 考公：选省份</h1>
+    <p class="intro">省考分省招录，各省竞争程度不同，笔试门槛也不一样：山东最卷（+5），吉林 / 黑龙江低一档（−5）。</p>
+    <div class="options">${CIVIL_EXAM.provinces.map((p) => `<button class="opt" data-act="exam-province" data-id="${p.id}"><b>${p.name}</b><span>笔试门槛 ${p.writtenMod > 0 ? '+' + p.writtenMod : p.writtenMod}。</span></button>`).join('')}</div>
+    <div class="actions"><button data-act="exam-back-type">返回重选考试</button></div>`);
+}
+function pickCivilExamProvince(id) {
+  const p = CIVIL_EXAM.provinces.find((x) => x.id === id);
+  if (!p || !G.examDraft) return;
+  G.examDraft.provinceId = p.id;
+  screenCivilExamPosition();
+}
+function screenCivilExamPosition() {
+  const s = G.state;
+  const d = G.examDraft || { type: 'provincial', provinceId: null, positionId: null };
+  const rows = CIVIL_EXAM.positions.map((pos) => {
+    const th = civilExamThresholds({ type: d.type, provinceId: d.provinceId, positionId: pos.id });
+    const okW = (s.attrs.skill || 0) >= th.written;
+    const okI = (s.attrs.express || 0) >= th.interview;
+    return `<button class="opt" data-act="exam-position" data-id="${pos.id}"><b>${pos.name}</b><span>${pos.desc}笔试门槛 ${th.written}（你 ${s.attrs.skill}${okW ? '，够' : '，不够'}）· 面试门槛 ${th.interview}（你 ${s.attrs.express}${okI ? '，够' : '，不够'}）。</span></button>`;
+  }).join('');
+  setScreen(`
+    <h1>T5 · 22 岁 · 考公：选职位</h1>
+    <p class="intro">你报的是${civilExamTypeName(d)}${d.type === 'provincial' ? ' · ' + civilExamProvinceName(d) : ''}。门槛是准备线，不是运气：低于门槛一定落榜，高于门槛一定通过。</p>
+    <div class="options">${rows}</div>
+    <div class="actions"><button data-act="exam-back">${d.type === 'provincial' ? '返回重选省份' : '返回重选考试'}</button></div>`);
+}
+function pickCivilExamPosition(id) {
+  const pos = CIVIL_EXAM.positions.find((x) => x.id === id);
+  if (!pos || !G.examDraft) return;
+  G.examDraft.positionId = pos.id;
+  screenCivilExamConfirm();
+}
+function screenCivilExamConfirm() {
+  const s = G.state;
+  const d = G.examDraft;
+  const th = civilExamThresholds(d);
+  setScreen(`
+    <h1>T5 · 22 岁 · 考公：报名</h1>
+    <div class="card"><p>你报的是${civilExamTypeName(d)}${d.type === 'provincial' ? ' · ' + civilExamProvinceName(d) : ''} · ${civilExamPositionName(d)}。</p>
+    <p>笔试门槛 ${th.written}，你的专业 ${s.attrs.skill}；面试门槛 ${th.interview}，你的表达 ${s.attrs.express}。${(s.attrs.skill || 0) >= th.written && (s.attrs.express || 0) >= th.interview ? '两项都够，正常发挥就能进。' : '有一项不够，硬考会落榜——可以先回去改报要求低的职位。'}</p></div>
+    <div class="actions"><button class="primary" data-act="exam-confirm">报名，参加笔试</button><button data-act="exam-back-position">返回重选职位</button></div>`);
+}
+function screenCivilExamWritten() {
+  const s = G.state;
+  const d = G.examDraft;
+  const th = civilExamThresholds(d);
+  setScreen(`
+    <h1>T5 · 22 岁 · 考公：笔试</h1>
+    <div class="card"><p>${civilExamTypeName(d)}${d.type === 'provincial' ? ' · ' + civilExamProvinceName(d) : ''} · ${civilExamPositionName(d)}。笔试门槛 ${th.written}，你的专业 ${s.attrs.skill}。</p></div>
+    <div class="actions"><button class="primary" data-act="exam-written">交卷，等笔试成绩</button></div>`);
+}
+function resolveCivilExamWritten() {
+  const s = G.state;
+  const d = G.examDraft;
+  const th = civilExamThresholds(d);
+  if ((s.attrs.skill || 0) >= th.written) screenCivilExamInterview();
+  else screenCivilExamFail('written', th);
+}
+function screenCivilExamInterview() {
+  const s = G.state;
+  const d = G.examDraft;
+  const th = civilExamThresholds(d);
+  setScreen(`
+    <h1>T5 · 22 岁 · 考公：面试</h1>
+    <div class="card"><p>笔试过了。${civilExamPositionName(d)}的面试门槛 ${th.interview}，你的表达 ${s.attrs.express}。</p></div>
+    <div class="actions"><button class="primary" data-act="exam-interview">参加面试</button></div>`);
+}
+function resolveCivilExamInterview() {
+  const s = G.state;
+  const d = G.examDraft;
+  const th = civilExamThresholds(d);
+  if ((s.attrs.express || 0) >= th.interview) screenCivilExamPassed();
+  else screenCivilExamFail('interview', th);
+}
+function screenCivilExamPassed() {
+  const d = G.examDraft;
+  setScreen(`
+    <h1>T5 · 22 岁 · 考公：考上了</h1>
+    <div class="card"><p>笔试、面试都过了。${civilExamTypeName(d)}${d.type === 'provincial' ? ' · ' + civilExamProvinceName(d) : ''} · ${civilExamPositionName(d)}，正式入职。</p></div>
+    <div class="actions"><button class="primary" data-act="exam-hire">正式入职</button></div>`);
+}
+function civilExamHire() {
+  const j = T5_JOBS.find((x) => x.id === 'stable');
+  const sec = SECTORS.find((x) => x.id === 'public');
+  G.examDraft = null;
+  signT5(j, sec, null);
+}
+function screenCivilExamFail(stage, th) {
+  const s = G.state;
+  const d = G.examDraft;
+  const isWritten = stage === 'written';
+  const have = isWritten ? (s.attrs.skill || 0) : (s.attrs.express || 0);
+  const need = isWritten ? th.written : th.interview;
+  setScreen(`
+    <h1>T5 · 22 岁 · 考公：${isWritten ? '笔试没过线' : '面试没过'}</h1>
+    <div class="card"><p>${isWritten ? '笔试' : '面试'}门槛 ${need}，你只有 ${have}。${isWritten ? '笔试看专业' : '面试看表达'}——准备不够，硬考就是落榜。</p></div>
+    <div class="actions"><button class="primary" data-act="exam-fail-repick">改报其他职位</button><button data-act="exam-fail-retype">换个考试类型</button><button data-act="exam-quit">放弃考公，回 T5 选别的工作</button></div>`);
+}
+
+// ---- 体制内年度考核（补充 C，Allen 2026-11-21 16:08） ----
+// 每年一次，档位优秀 / 称职 / 基本称职 / 不称职。判定只看本年的
+// 投入：产出行动（系统学习 / 加班 / 接私活 / 开源 / 社区 / 内容 /
+// 兼职 / 副业 / 考证学习 / 推进项目）计数；不称职的门槛定得很高——
+// 全年零产出行动、且剩 ≥2 AP、且连本年事件都没选，才算不称职
+// （等于这一年什么都没干）。正常玩（哪怕只做一件产出事，或把 AP
+// 花完）拿不到不称职。只有两次连续不称职，才触发组织部谈话；
+// 谈话只加压力 +5、清零连计数，不是处分、不是离职——谈话本身是
+// 罕见的最坏结果，不是常规事件。
+const PUBLIC_EVAL_PRODUCTIVE = ['系统学习', '加班 / 接私活', '开源 / 社区 / 内容', '兼职 / 副业'];
+function publicEvalEffort(s) {
+  return (s.yearActions || []).filter((a) => PUBLIC_EVAL_PRODUCTIVE.indexOf(a) >= 0 || (typeof a === 'string' && (a.indexOf('考证学习：') === 0 || a.indexOf('推进项目：') === 0))).length;
+}
+function evaluatePublicYear(s) {
+  const effort = publicEvalEffort(s);
+  let rating;
+  if (effort >= 2) rating = '优秀';
+  else if (effort === 1) rating = '称职';
+  else if (s.ap >= 2 && !s.flags.eventChoice) rating = '不称职';
+  else rating = '基本称职';
+  s.flags.evalHistory = s.flags.evalHistory || [];
+  s.flags.evalHistory.push({ turn: s.turn, rating });
+  let talk = false;
+  if (rating === '不称职') {
+    s.flags.evalStreak = (s.flags.evalStreak || 0) + 1;
+    if (s.flags.evalStreak >= 2) {
+      talk = true;
+      s.flags.evalTalk = s.flags.evalTalk || [];
+      s.flags.evalTalk.push({ turn: s.turn });
+      s.attrs.stress = (s.attrs.stress || 0) + 5;
+      s.flags.evalStreak = 0;
+    }
+  } else {
+    s.flags.evalStreak = 0;
+  }
+  return { rating, effort, talk };
+}
+
+// ---- 官场诱惑与纪律风险（Allen 2026-11-21 16:10） ----
+// 触发阈值：影响力 ≥ 30（体制内影响力名义上限 40 的 75%；代码里
+// 40 目前只是 T5 描述文案、没有强制上限——阈值按名义上限取高位）。
+// 兼职讲课：接了当场钱 +3 万，此后每年结算时掷一次举报骰
+// （20%）；举报后果分两档——首次诫勉谈话（影响力 −10、压力 +10、
+// 兼职停），再次举报留置 / 双规审查（影响力清零、退缴 10 万、
+// 压力 +20、兼职停、不再出现诱惑）。年代适配：2018 年监察法之后
+// 叫留置，之前叫双规，按游戏内年份定（eraContextFor 的
+// calendarYear；旧存档 / 直接切片默认 2026，即留置）。
+// 下海：离开体制内（employment 变 freelance），钱 +5 万、影响力
+// −10、压力 +5；此后不再是体制内的人（考核、诱惑、体制内事件全停）。
+const PUBLIC_TEMPT_INFLUENCE = 30;
+const MOONLIGHT_REPORT_CHANCE = 20;
+function temptationHtml(s) {
+  if (s.turn < 6 || !isPublicJob(s)) return '';
+  if ((s.attrs.influence || 0) < PUBLIC_TEMPT_INFLUENCE) return '';
+  if (s.flags.moonlight || (s.flags.discipline && s.flags.discipline.investigation)) return '';
+  if (s.flags.temptationYear === s.turn) return ''; // 今年已拒绝过，不再出现
+  return `<div class="card"><h2>有人找上门了</h2><p>你在单位里有了点名气。有人请你去外头兼职讲课，也有人劝你干脆下海单干。体制内有纪律，兼职讲课一旦被人举报，轻则谈话，重则审查。</p><div class="options"><button class="opt" data-act="tempt-moonlight"><b>接了，在外兼职讲课</b><span>钱 +3 万。之后每年结算时有 20% 的可能被人举报。</span></button><button class="opt" data-act="tempt-xiahai"><b>下海单干</b><span>离开体制内：钱 +5 万，影响力 −10，压力 +5。此后不再是体制内的人。</span></button><button class="opt" data-act="tempt-decline"><b>都拒绝</b><span>什么都不发生。</span></button></div></div>`;
+}
+function acceptMoonlight(s) {
+  s.flags.moonlight = { sinceTurn: s.turn };
+  s.attrs.money = (s.attrs.money || 0) + 3;
+  autosave('接了兼职讲课');
+}
+function acceptXiahai(s) {
+  s.flags.employment = 'freelance';
+  if (s.flags.jobProfile) s.flags.jobProfile.employerType = 'freelance';
+  s.flags.moonlight = null;
+  s.attrs.money = (s.attrs.money || 0) + 5;
+  s.attrs.influence = Math.max(0, (s.attrs.influence || 0) - 10);
+  s.attrs.stress = (s.attrs.stress || 0) + 5;
+  autosave('下海单干');
+}
+function declineTemptation(s) {
+  s.flags.temptationYear = s.turn;
+  autosave();
+}
+function resolveMoonlightReport(s, rng) {
+  if (!s.flags.moonlight) return null;
+  const roll = rng.int(1, 100);
+  if (roll > MOONLIGHT_REPORT_CHANCE) return { reported: false, roll };
+  const disc = s.flags.discipline || { warnings: 0 };
+  s.flags.discipline = disc;
+  if (disc.warnings >= 1) {
+    const year = eraContextFor(s, s.turn).calendarYear;
+    const term = year >= 2018 ? '留置' : '双规';
+    disc.investigation = true;
+    s.flags.moonlight = null;
+    s.attrs.influence = 0;
+    s.attrs.money = Math.max(0, (s.attrs.money || 0) - 10);
+    s.attrs.stress = (s.attrs.stress || 0) + 20;
+    return { reported: true, roll, level: 'investigation', term, year };
+  }
+  disc.warnings += 1;
+  s.flags.moonlight = null;
+  s.attrs.influence = Math.max(0, (s.attrs.influence || 0) - 10);
+  s.attrs.stress = (s.attrs.stress || 0) + 10;
+  return { reported: true, roll, level: 'warning' };
+}
+// 体制内年份结算（endYear 调用，T6 起）：先掷兼职举报骰，再评年度
+// 考核。返回结算卡要显示的两行（无事时 reportLine 为 null）。
+function resolvePublicYear(s, rng) {
+  const report = resolveMoonlightReport(s, rng);
+  const ev = evaluatePublicYear(s);
+  const evalLine = '年度考核：' + ev.rating + '（本年产出行动 ' + ev.effort + ' 项）。' + (ev.talk ? '连续两次不称职，组织部找你谈了话：压力 +5。这只是谈话，你的位置还在。' : '');
+  let reportLine = null;
+  if (report && report.reported) {
+    reportLine = report.level === 'investigation'
+      ? '兼职讲课被人举报了：' + report.term + '审查。影响力清零，退缴 10 万，压力 +20，兼职已停。'
+      : '兼职讲课被人举报了：诫勉谈话。影响力 −10，压力 +10，兼职已停。';
+  }
+  return { report, eval: ev, evalLine, reportLine };
 }
 
 // ---------- yearly loop T2–T8 ----------
@@ -891,6 +1199,7 @@ function meetsRequires(req, s) {
   if (req.employment && s.flags.employment !== req.employment) return false;
   if (req.housing && s.flags.housing !== req.housing) return false;
   if (req.hasVenture && !(s.ventures || []).some((v) => v.status === 'active' || v.status === 'validating' || v.status === 'running')) return false;
+  if (req.public && !isPublicJob(s)) return false; // v1.4.2：体制内事件
   if (req.family && !(s.origin && s.origin.familyKey !== 'orphan')) return false;
   return true;
 }
@@ -1039,6 +1348,8 @@ function enterYear(turn) {
     ${eraYearCardHtml(s, turn)}
     ${yearExtraCardsHtml(s)}
     ${eventCardHtml(ev, s)}
+    ${certHtml(s)}
+    ${temptationHtml(s)}
     ${venturePanelHtml(s)}
     ${shengbenHtml(s, 'year')}
     ${transferMajorHtml(s)}
@@ -1092,6 +1403,8 @@ function startYearRefresh() {
     ${eraYearCardHtml(s, turn)}
     ${yearExtraCardsHtml(s)}
     ${eventCardHtml(ev, s)}
+    ${certHtml(s)}
+    ${temptationHtml(s)}
     ${venturePanelHtml(s)}
     ${shengbenHtml(s, 'year')}
     ${transferMajorHtml(s)}
@@ -1132,6 +1445,10 @@ function endYear() {
   s.flags.advancedVenture = null;
   s.rngState = G.rng.getState();
   const res = settleYear(s, DIFFICULTIES[s.difficulty]);
+  // v1.4.2：体制内年度考核 + 兼职举报结算（public 分支，T6 起）。
+  // 在 settleYear 之后跑：考核读本年行动与剩余 AP（settleYear 不动
+  // 这两项），谈话 / 举报的压力与钱直接进结算快照的 after。
+  const publicYear = (s.turn >= 6 && isPublicJob(s)) ? resolvePublicYear(s, G.rng) : null;
   Analytics.track('year_end', { turn: s.turn, tier: res.tier });
   for (const v of (s.ventures || [])) {
     const before = ventureBefore.get(v.id);
@@ -1167,6 +1484,8 @@ function endYear() {
     actionsText: s.yearActions.join('、') || '无',
     omenText: s.omenLog.filter((o) => o.turn === s.turn).map((o) => o.text).join(' ') || '今年没有征兆。',
     ventureLines,
+    evalLine: publicYear ? publicYear.evalLine : null,
+    reportLine: publicYear && publicYear.reportLine ? publicYear.reportLine : null,
   };
   autosave('年度结算完成');
   renderSettlementCard(s);
@@ -1186,8 +1505,10 @@ function renderSettlementCard(s) {
       <div><b>人生简报</b><p>${esc(c.brief)}</p></div>
       <div><b>被记下的征兆</b><p>${esc(c.omenText || '今年没有征兆。')}</p></div>
       ${c.ventureLines.length ? `<div><b>我的项目</b><p>${esc(c.ventureLines.join(' '))}</p></div>` : ''}
+      ${c.evalLine ? `<div><b>年度考核</b><p>${esc(c.evalLine)}</p></div>` : ''}
+      ${c.reportLine ? `<div><b>纪律风险</b><p>${esc(c.reportLine)}</p></div>` : ''}
     </div>
-    ${next === 9 ? `<div class="actions"><button class="primary" data-act="to-slice">进入 T9 · 26 岁裁员之夜</button></div>`
+    ${next === 9 ? `<div class="actions"><button class="primary" data-act="to-slice">进入 T9 · 26 岁${isPublicJob(s) ? '危机' : '裁员'}之夜</button></div>`
       : `<div class="actions"><button class="primary" data-act="year-next" data-id="${next}">进入 T${next} · ${17 + next} 岁</button></div>`}`);
 }
 
@@ -1249,7 +1570,7 @@ function revealC(s) {
   const h2 = s.flags.h2;
   if (h2 && h2.laidOff) s.flags.consecFails = (s.flags.consecFails || 0) + 1;
   else s.flags.consecFails = 0;
-  addLesson(s, 'C', 'H2 裁员名单：进切片那一刻就封存了，三个决定只定应对、不定结果。');
+  addLesson(s, 'C', isPublicJob(s) ? '考核与轮岗：这一夜的三个决定只定应对，不定结果。' : 'H2 裁员名单：进切片那一刻就封存了，三个决定只定应对、不定结果。');
   autosave('承诺 C 已兑现');
 }
 
@@ -1547,16 +1868,22 @@ function redemptionCardHtml(s, id) {
     }).join('；');
     const branch = s.flags.t9Branch ? (T9_BRANCH_LABEL[s.flags.t9Branch] || s.flags.t9Branch) : '未知';
     const isEmployed = sliceBranch(s) === 'employed';
+    // v1.4.2：体制内分支的 C 卡不写裁员 / 解雇 / 补偿 / 劳动合同法——
+    // 三格（有无那颗骰、判定、名单）都换成考核与轮岗的说法；其他
+    // 非雇员分支（创业 / 读研 / 自由职业）沿用 v1.2 旧文案，不在本轮改。
+    const isPublic = sliceBranch(s) === 'public';
     const sev = h2.laidOff ? severancePay(s) : null;
     return grid(
       esc((isEmployed ? '裁员应对：' : '危机应对：') + decs),
       (typeof h2.chance === 'number'
         ? `裁员概率 ${h2.chance}%，掷出 ${h2.roll}。这颗骰在你 26 岁那年掷出。`
+        : isPublic ? `这一夜没有那颗骰子：体制内走考核与轮岗，H2 不适用，走的是「${esc(branch)}」这条线。`
         : `这一夜没有裁员骰：你没有雇主，H2 不适用，走的是「${esc(branch)}」这条线。`),
       (typeof h2.laidOff === 'boolean'
         ? (h2.laidOff ? `被裁了。N = ${sev.amount} 万到账（${sev.basis}），走的是「${esc(branch)}」这条线。` : `岗位保住了，走的是「${esc(branch)}」这条线。`)
+        : isPublic ? '这一夜没有判定：考核与轮岗才是主题。'
         : '裁员判定未知。'),
-      isEmployed ? '裁员名单没有最小翻盘点：进名单的四个原因，都是过去三年写好的。' : '这一夜没有裁员名单：三个决定只定应对，不定结果。',
+      isEmployed ? '裁员名单没有最小翻盘点：进名单的四个原因，都是过去三年写好的。' : isPublic ? '这一夜没有名单：三个决定只定应对，不定结果。' : '这一夜没有裁员名单：三个决定只定应对，不定结果。',
       omenReplayHtml(s, [9]));
   }
   if (id === 'E') {
@@ -2150,6 +2477,13 @@ function pickT5(id) {
   // （screenT5 已守卫；这里防陈旧屏/重复派发的直接调用）。
   if (s.commitments.B) { showT5Signed(s); return; }
   const j = T5_JOBS.find((x) => x.id === id);
+  // v1.4.2 (补充 A)：体制内不再一键签，改走入职考试（国考 / 省考 →
+  // 省份 → 职位 → 报名 → 笔试 → 面试），通过才 signT5。
+  if (j && j.id === 'stable') {
+    G.examDraft = { type: null, provinceId: null, positionId: null };
+    screenCivilExamType();
+    return;
+  }
   // v1.2 (P1-3): T5 分两步签——先选工作（公司性质），再选行业。
   // 钱 / 压力与承诺卡 B 都在行业选完才落定。
   G.t5Draft = { job: j };
@@ -2251,14 +2585,20 @@ function pickT6(id) {
 // 切片走哪条危机线，由雇佣关系定（P0-7），不是由 t9Branch 的事后
 // 标签定：有雇主的走裁员线（H2），创业 / 读研 / 自由职业走各自的
 // 危机分支（第一、第二件事换文案，第三件事共用）。
+// v1.4.2：体制内（employerType 'stable' 或 sector 'public'，见
+// engine.js isPublicJob）走 'public' 分支——不掷 H2、不裁员、不领
+// 补偿，走“危机之夜”线（机构改革传闻 / 考核 / 轮岗 / 借调）。
+// 注意：大厂但选了体制内行业（sector 'public'）也走 public 分支——
+// 这是按 brief 的刻意简化（行业字段说了算），不是 bug。
 function sliceBranch(s) {
   const emp = s.flags && s.flags.employment;
   if (emp === 'startup' || emp === 'grad' || emp === 'freelance') return emp;
+  if (isPublicJob(s)) return 'public';
   return 'employed';
 }
 function sliceDecisions(s) {
   const b = sliceBranch(s);
-  if (b === 'startup' || b === 'grad' || b === 'freelance') {
+  if (b === 'startup' || b === 'grad' || b === 'freelance' || b === 'public') {
     return [T9_SLICE.branchFirst[b], T9_SLICE.branchSecond[b], T9_SLICE.decisions[2]];
   }
   return T9_SLICE.decisions;
@@ -2515,7 +2855,7 @@ function renderSliceOutro(s) {
       <p>钱 ${s.attrs.money} 万 · 健康 ${s.attrs.health} · 压力 ${s.attrs.stress}（${pressureTier(s.attrs.stress).name}）· 家庭线 ${s.attrs.family} · Debt ${s.attrs.debt}</p>
       <p class="muted">执念：${s.obsessions.map((id) => (OBSESSIONS.find((o) => o.id === id) || {}).name).join('、') || '未选'}</p>
     </div>
-    <p class="muted">承诺 C（裁员应对）兑现从 T10 开始。35 岁结算后才出现「再来一次」（解锁 S4 改写入口与并行周目位）——结算前没有改写入口。</p>
+    <p class="muted">承诺 C（${sliceBranch(s) === 'employed' ? '裁员应对' : '危机应对'}）兑现从 T10 开始。35 岁结算后才出现「再来一次」（解锁 S4 改写入口与并行周目位）——结算前没有改写入口。</p>
     <div class="actions">
       <button class="primary" data-act="year-next" data-id="10">进入 T10 · 27 岁</button>
       <button data-act="export">导出存档码</button>
@@ -2544,7 +2884,12 @@ function sliceOutcomeCard(s) {
   const crisisLine = branch === 'startup' ? '账上的钱只剩三个月，三个决定只定应对，不定结果。'
     : branch === 'grad' ? '论文和毕业压在眼前，三个决定只定应对，不定结果。'
     : branch === 'freelance' ? '大客户断约，三个决定只定应对，不定结果。'
+    : branch === 'public' ? '考核与轮岗才是这一夜的主题，三个决定只定应对，不定结果。'
     : '三个决定只定应对，不定结果。';
+  // v1.4.2：体制内分支的结局卡不写裁员 / 解雇 / 补偿 / 劳动合同法。
+  if (branch === 'public') {
+    return `<div class="card"><h2>这一夜没有那颗骰子</h2><p>体制内走考核与轮岗，H2 不适用。走的是「${esc(T9_BRANCH_LABEL[branch] || branch)}」这条线：${crisisLine}</p></div>`;
+  }
   return `<div class="card"><h2>这一夜没有裁员骰</h2><p>你没有雇主，H2 不适用。走的是「${esc(T9_BRANCH_LABEL[branch] || branch)}」这条线：${crisisLine}</p></div>`;
 }
 
@@ -3050,9 +3395,28 @@ document.addEventListener('click', (e) => {
     case 't5-pick': pickT5(id); break;
     case 't5-sector-pick': pickT5Sector(id); break;
     case 't5-subsector-pick': pickT5Subsector(id); break;
+    // v1.4.2：体制内入职考试流程。
+    case 'exam-type': pickCivilExamType(id); break;
+    case 'exam-province': pickCivilExamProvince(id); break;
+    case 'exam-position': pickCivilExamPosition(id); break;
+    case 'exam-confirm': screenCivilExamWritten(); break;
+    case 'exam-written': resolveCivilExamWritten(); break;
+    case 'exam-interview': resolveCivilExamInterview(); break;
+    case 'exam-hire': civilExamHire(); break;
+    case 'exam-back': if (G.examDraft && G.examDraft.type === 'provincial') screenCivilExamProvince(); else screenCivilExamType(); break;
+    case 'exam-back-type': screenCivilExamType(); break;
+    case 'exam-back-position': screenCivilExamPosition(); break;
+    case 'exam-fail-repick': screenCivilExamPosition(); break;
+    case 'exam-fail-retype': G.examDraft = { type: null, provinceId: null, positionId: null }; screenCivilExamType(); break;
+    case 'exam-quit': G.examDraft = null; screenT5(); break;
     case 'shengben-t5': if (attemptShengben(G.state, G.rng, 0)) screenT5(); break;
     case 'shengben-year': if (attemptShengben(G.state, G.rng, 1)) startYearRefresh(); break;
     case 'transfer-major': if (attemptTransferMajor(G.state, G.rng)) startYearRefresh(); break;
+    // v1.4.2：考证学习 + 官场诱惑。
+    case 'cert-study': if (certStudy(G.state, id)) startYearRefresh(); break;
+    case 'tempt-moonlight': acceptMoonlight(G.state); startYearRefresh(); break;
+    case 'tempt-xiahai': acceptXiahai(G.state); startYearRefresh(); break;
+    case 'tempt-decline': declineTemptation(G.state); startYearRefresh(); break;
     case 't6-pick': pickT6(id); break;
     case 't12-intimate': G.t12Intimate = id; if (id === 'single') G.t12Cost = 'none'; screenT12(); break;
     case 't12-boundary': {

@@ -363,10 +363,10 @@ function eraAdm(year, track, base, major) {
   click('t1-pick', 'insist');
   click('t1-confirm'); // v1.1 (d): pick is a draft; submit to execute.
   check('ADJ-07 legacy UI 调剂： major 土木， k 1.3, stress +8 (20 -> 28)', ctx('G.state.major').name === '土木' && ctx('G.state.flags.majorK') === 1.3 && ctx('G.state.attrs.stress') === 28 && ctx('G.state.flags.adjusted') === true, JSON.stringify(ctx('G.state.major')) + ' stress=' + ctx('G.state.attrs.stress'));
-  // 转专业 action: 1 AP, 50%, once per year, T2–T4 only.
+  // 转专业 action: 1 AP, 50%, once per year, T2–T4 only, 专业 ≥30 门槛（v1.4.2）。
   const transferSetup = (turn, roll) => {
     eraState({ birthYear: 1995, examYear: 2013, turn });
-    ctx(`G.state.major = { name: '土木', source: 'self', tier: '一本' }; G.state.flags.adjusted = true; G.state.flags.adjustedFrom = '计算机'; G.state.ap = 3; G.state.attrs.stress = 20;`);
+    ctx(`G.state.major = { name: '土木', source: 'self', tier: '一本' }; G.state.flags.adjusted = true; G.state.flags.adjustedFrom = '计算机'; G.state.ap = 3; G.state.attrs.stress = 20; G.state.attrs.skill = 30;`);
     ctx(`G.rng = ({ next: () => 0.5, int: (a,b) => ${roll}, chance: () => true, float: (a) => a, pick: (arr) => arr[0], weighted: (e) => e[0][0], shuffle: (a) => a.slice(), getState: () => 0, setState: () => {} })`);
   };
   transferSetup(2, 30);

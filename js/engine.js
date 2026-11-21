@@ -515,6 +515,21 @@ function careSubjectNoParents(state) {
   return { kind: 'none', label: '', subject: '', careNoun: '' };
 }
 
+// ---- v1.4.2: 体制内分支判定 ----
+// 在职（employment 'employed'）且档案是体制内（employerType 'stable'）
+// 或行业是体制内（sector 'public'）。下海（employment 变 freelance）
+// 后不再是体制内；旧存档的 jobProfile 迁移壳只出现在教培
+// （employerType 'unknown'，sector 'education'），永远判不上体制内；
+// 体制内玩家的 jobProfile 由 signT5 写入，employerType 一定是
+// 'stable'，所以旧存档也能判定。
+function isPublicJob(s) {
+  const fl = (s && s.flags) || {};
+  if (fl.employment !== 'employed') return false;
+  const jp = fl.jobProfile;
+  if (!jp) return false;
+  return jp.employerType === 'stable' || jp.sector === 'public';
+}
+
 // ---- v1.2 (P0-7): 裁员补偿按实际状态 ----
 // N = 本单位工作年限 × 月薪（劳动合同法经济补偿口径）。工作年限与
 // 年薪读 T5 的 jobProfile（T5 入职 → T9 共 4 年）；没有可信档案时

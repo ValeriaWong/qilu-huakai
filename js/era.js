@@ -137,6 +137,9 @@ function t9Branch(state) {
   const flags = state.flags || {};
   if (flags.gradSchool) return 'grad';
   if (flags.employment === 'freelance') return 'freelance'; // v1.2 (P0-7): 自由职业走大客户断约线，不掷 H2
+  // v1.4.2: 体制内走稳岗线（在 grad/freelance 之后、startup 之前判，
+  // 与 sliceBranch 一致——切片分支与事后分支用同一条规则）。
+  if (isPublicJob(state)) return 'public';
   const hasVenture = (state.ventures || []).some((v) => v.status === 'active' || v.status === 'validating' || v.status === 'running');
   if (flags.employment === 'startup' || hasVenture) return 'startup';
   const h2 = flags.h2;
@@ -148,7 +151,7 @@ function t9Branch(state) {
 }
 const T9_BRANCH_LABEL = {
   'laid-off': '被裁', transfer: '岗位协商', restructure: '组织调整',
-  pivot: '转型', startup: '创业危机', grad: '读研危机', freelance: '自由职业危机',
+  pivot: '转型', startup: '创业危机', grad: '读研危机', freelance: '自由职业危机', public: '体制内稳岗',
 };
 
 // ---- exam system by province + year (v6.1 switching points) ----
